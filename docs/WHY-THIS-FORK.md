@@ -6,9 +6,9 @@ groundwork Lycoreia started from. Its authors are credited in [NOTICE.md](../NOT
 When we started playing it in real two-PC sessions, we kept hitting the same classes of problems:
 lost packets over normal Wi-Fi, two players "owning" the same slime, items freezing mid-air when a
 guest vacuumed them, and progress that only existed on one side. Fixing them meant changing the
-foundations — ownership, netcode, vacuum and lifecycle — rather than patching symptoms.
+foundations (ownership, netcode, vacuum and lifecycle) rather than patching symptoms.
 
-That scale of change (125 new source files, 241 changed — about 40,000 lines added or rewritten) is hard to land as pull requests
+That scale of change (125 new source files, 241 changed, about 40,000 lines added or rewritten) is hard to land as pull requests
 to a project with its own direction and pace, so we chose to develop it as an independent
 successor. The GPLv3, under which Ranching Together is published, explicitly gives everyone the
 right to do this; we chose to use it, while keeping the original copyright and history intact.

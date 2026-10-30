@@ -48,10 +48,10 @@ CI needs the same reference DLLs as a local build. Keep them **private**:
    `tools/pack-reference-libs.sh "/path/to/Slime Rancher 2" --zip reference-libs.zip`
 2. Upload it somewhere private, e.g. as a release asset of a **private** repository.
 3. In this repository: **Settings → Secrets and variables → Actions**, add:
-   - `REFERENCE_LIBS_URL` — download URL of the zip. For a private GitHub release asset use the API
+   - `REFERENCE_LIBS_URL`: download URL of the zip. For a private GitHub release asset use the API
      URL: `https://api.github.com/repos/<owner>/<private-repo>/releases/assets/<asset-id>`.
-   - `REFERENCE_LIBS_TOKEN` — (optional) token with read access to that private repo.
-   - `REFERENCE_LIBS_SHA256` — (optional) expected checksum of the zip.
+   - `REFERENCE_LIBS_TOKEN`: (optional) token with read access to that private repo.
+   - `REFERENCE_LIBS_SHA256`: (optional) expected checksum of the zip.
 
 Re-create the archive whenever the game, MelonLoader or Starlight updates.
 Pull requests from forks do not get secrets, so `build.yml` skips the build for them.

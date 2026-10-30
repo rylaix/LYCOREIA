@@ -5,7 +5,7 @@ Developed by **[Rylaix](https://github.com/rylaix)** (core developer) with
 **[Kum1te](https://github.com/kum1te)** (core QA). Free software under GPLv3.
 
 [Download](https://github.com/rylaix/Lycoreia/releases) ·
-[Discord](https://discord.gg/nGyPFTdnCH) ·
+[Discord](https://discord.gg/EvD7WhSwqh) ·
 [Report a bug](https://github.com/rylaix/Lycoreia/issues/new/choose) ·
 [Changelog](CHANGELOG.md)
 
@@ -22,25 +22,26 @@ progress.
 
 ### What Lycoreia adds over Ranching Together 0.3.9
 
-- **Host-authoritative world** — the host grants ownership of slimes and items (two-phase commit with
+- **Host-authoritative world**: the host grants ownership of slimes and items (two-phase commit with
   epochs and an ownership arbiter), so two players grabbing the same slime no longer split the world.
-- **Reliable netcode** — no more lost packets, sequence deadlocks or reconnect storms; tested under
+- **Reliable netcode**: no more lost packets, sequence deadlocks or reconnect storms; tested under
   simulated packet loss, jitter and bad Wi-Fi.
-- **Full-range vacuum for guests** — the game's native 20 m reach with its own spring physics.
-- **Guest inventory is kept** — your vacuum inventory is stored per host and restored when you rejoin.
-- **Complete player FX** — the other player's suction cone and vac shockwave are visible.
-- **More slime behaviour** — Tangle vines and Tabby stalking are synced.
-- **Shared progression** — treasure pods (state, animation, rewards and reward popups for everyone),
+- **Full-range vacuum for guests**: the game's native 20 m reach with its own spring physics.
+- **Guest inventory is kept**: your vacuum inventory is stored per host and restored when you rejoin.
+- **Complete player FX**: the other player's suction cone and vac shockwave are visible, and their
+  vacuum bends grass, flowers and plants on everyone's screen.
+- **More slime behaviour**: Tangle vines and Tabby stalking are synced.
+- **Shared progression**: treasure pods (state, animation, rewards and reward popups for everyone),
   blueprints, slime appearances, vac skins bought in the shop, market saturation and plort sales.
-- **Per-player vac skins** — everyone picks their own skin at home, changeable mid-session, visible to all.
-- **Host-authoritative shop, upgrades and currency** — no double purchases, no money desync.
-- **Shared build-mode inventory** — gadget storage synced, including on join.
-- **Ranch protection** — while connected, the game's cleanups never delete slimes, animals or plorts on
+- **Per-player vac skins**: everyone picks their own skin at home, changeable mid-session, visible to all.
+- **Host-authoritative shop, upgrades and currency**: no double purchases, no money desync.
+- **Shared build-mode inventory**: gadget storage synced, including on join.
+- **Ranch protection**: while connected, the game's cleanups never delete slimes, animals or plorts on
   your ranch (Tarr and produce keep vanilla rules).
-- **No "chicken waterfall"** — wild animal spawning is capped while connected.
-- **Gray Labyrinth & Sanctuary** — Prisma disruption, stabilizing field spawners, Sanctuary rooms and
+- **No "chicken waterfall"**: wild animal spawning is capped while connected.
+- **Gray Labyrinth & Sanctuary**: Prisma disruption, stabilizing field spawners, Sanctuary rooms and
   themes are synced.
-- **Lighter on FPS** — expensive per-object tracing removed from player builds.
+- **Lighter on FPS**: expensive per-object tracing removed from player builds.
 
 Full list: [CHANGELOG.md](CHANGELOG.md). Background: [docs/WHY-THIS-FORK.md](docs/WHY-THIS-FORK.md).
 
@@ -53,7 +54,7 @@ Full list: [CHANGELOG.md](CHANGELOG.md). Background: [docs/WHY-THIS-FORK.md](doc
 | Feature | Status | Details |
 |:--|:--:|:--|
 | Player movement, animations, sound FX | 🟩 | |
-| Player visual FX | 🟩 | Remote suction cone and vac shockwave (new in Lycoreia, and much more coming!) |
+| Player visual FX | 🟩 | Remote suction cone, vac shockwave, grass and flowers bending under other players' vacuums (new in Lycoreia) |
 | Player inventory | 🟩 | Guest inventory stored and restored on rejoin (new in Lycoreia) |
 | Initial save load | 🟩 | Everything synced below is loaded on join |
 | Slimes (incl. radiant) | 🟩 | Host-authoritative ownership |
@@ -81,7 +82,7 @@ Full list: [CHANGELOG.md](CHANGELOG.md). Background: [docs/WHY-THIS-FORK.md](doc
 | Multiplayer API | 🟩 | |
 | Gardens (crop state) | 🟨 | Crops can occasionally differ between players |
 | Tarr & water | 🟨 | Water effects on Tarr not shown to guests |
-| Jetpack FX of other players/Other player VFX&shaders sync | 🟥 | Planned |
+| Jetpack FX of other players | 🟥 | Planned |
 
 ---
 
@@ -135,7 +136,7 @@ To restore: close the game and copy the `Steam/...` folder from the backup into
 2. Put `Starlight.dll` into the game's `Mods` folder.
 3. Download `Lycoreia-<version>.zip` from [Releases](https://github.com/rylaix/Lycoreia/releases) and
    copy `Mods/SR2MP.dll` into the game's `Mods` folder.
-   **Replace Ranching Together** — it uses the same file name, and the two mods cannot run together.
+   **Replace Ranching Together**: it uses the same file name, and the two mods cannot run together.
 4. Launch the game; the multiplayer menu appears on the main menu (F4 toggles it).
 5. Fill in the first-time settings screen.
 
@@ -149,8 +150,8 @@ Every player needs **exactly the same version** of Lycoreia (and of every other 
   join code.
 
 ### Packages
-- `Lycoreia-<version>.zip` — for playing.
-- `Lycoreia-<version>-deeplog.zip` — writes detailed diagnostics to
+- `Lycoreia-<version>.zip`: for playing.
+- `Lycoreia-<version>-deeplog.zip`: writes detailed diagnostics to
   `UserData/Lycoreia/diagnostics.jsonl`. Use it when you want to report a bug.
 
 ### Coming from Ranching Together or an earlier Lycoreia test build
@@ -168,7 +169,7 @@ Settings live in MelonPreferences (`UserData/MelonPreferences.cfg`) under the `S
 ## Reporting bugs
 Open an [issue](https://github.com/rylaix/Lycoreia/issues/new/choose) and attach `latest.log` and
 `diagnostics.jsonl*` from `UserData/Lycoreia/` of **both** players (use the `-deeplog` package while
-reproducing). Logs can contain IP addresses — check them before posting.
+reproducing). Logs can contain IP addresses, so check them before posting.
 
 ---
 
@@ -179,10 +180,10 @@ See [docs/BUILDING.md](docs/BUILDING.md). Releases are built by GitHub Actions
 ---
 
 ## License & credits
-Lycoreia is free software under the **GNU General Public License v3** — see [LICENSE](LICENSE).
+Lycoreia is free software under the **GNU General Public License v3**; see [LICENSE](LICENSE).
 
-- **Core developer:** **Rylaix** — <https://github.com/rylaix>
-- **Core QA:** **Kum1te** — <https://github.com/kum1te>
+- **Core developer:** **Rylaix**, <https://github.com/rylaix>
+- **Core QA:** **Kum1te**, <https://github.com/kum1te>
 - Lycoreia started as a fork of [Ranching Together](https://github.com/pyeight/SlimeRancher2Multiplayer)
   (about 15 % of that code remains); its authors and other upstream credits are listed in
   [NOTICE.md](NOTICE.md).

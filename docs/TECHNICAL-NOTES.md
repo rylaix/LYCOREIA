@@ -1,14 +1,14 @@
 # Technical notes
 
 Engine-level findings behind Lycoreia's fixes. Offsets are for the game build named in each section
-and change with every game update — treat them as historical notes, not stable API.
+and change with every game update; treat them as historical notes, not stable API.
 
 ## Vacuum: native spring joints (game 1.3.0)
 - Long-range pulls use dynamic `SpringJoint`s stored in `VacuumItem._joints`
   (`ConsumeExistingJointed`, RVA `0xA63470`).
 - The original guest path checked `LockJoint`, assumed the pull had failed and called
   `Capture(LockJoint)`. Native `Vacuumable.SetCaptive` (RVA `0x644200`) destroys the previous joint's
-  GameObject, killing the active pull — items beyond ~2.5 m froze mid-air.
+  GameObject, killing the active pull, so items beyond ~2.5 m froze mid-air.
 - The host also limited guest captures to `CaptureDist + 3 m` (~4.5 m) while `MaxVacDist` is 20 m.
 
 ## Remote vacuum cone shader
@@ -34,7 +34,7 @@ and change with every game update — treat them as historical notes, not stable
 ## Population cleanups in co-op
 - `CellDirector.Despawn`, `MaybeCullOnReenable.MaybeDestroy` and `DestroyAfterTime` count replicas and
   other peers' actors as local population. The ranch test uses the game's own
-  `CellDirector.IsOnRanch(RegionMember)` — the `ConservatoryFields` scene group also contains
+  `CellDirector.IsOnRanch(RegionMember)`: the `ConservatoryFields` scene group also contains
   Rainbow Fields, so a scene-group test would protect the wilds too.
 
 ## Measurements
@@ -59,8 +59,8 @@ and change with every game update — treat them as historical notes, not stable
 
 ## Gadget pickup
 - Placed gadgets have no physics owner, so the host accepts a gadget destroy from any connected
-  player. Rejecting it had left the gadget on the host while the picker's +1 inventory count synced —
-  a duplicate.
+  player. Rejecting it had left the gadget on the host while the picker's +1 inventory count synced,
+  causing a duplicate.
 
 ## Separate identity from Ranching Together
 - Mod id `com.rylaix.lycoreia`; data in `UserData/Lycoreia` (`ModPaths.DataDirectory`, one-time copy of

@@ -1,6 +1,6 @@
 # NOTICE
 
-Lycoreia — core developer **Rylaix** (<https://github.com/rylaix>), core QA **Kum1te**
+Lycoreia: core developer **Rylaix** (<https://github.com/rylaix>), core QA **Kum1te**
 (<https://github.com/kum1te>).
 
 Lycoreia started as a modified version of **Ranching Together** (Slime Rancher 2 Multiplayer).

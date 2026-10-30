@@ -9,13 +9,14 @@ namespace SR2MP.Shared.Utils;
 /// through the normal remote-player path, drives its look pitch from a control file and renders it from
 /// a debug camera, so arm/torso poses can be screenshotted without a second game.
 /// Enabled by LYCOREIA_TEST_AVATAR=&lt;control file&gt;. Control file lines: pitch=&lt;deg, + = down&gt;,
-/// view=front|side|back|left|threequarter|top, dist=&lt;m&gt;, moving=0|1.
+/// view=front|side|back|left|threequarter|top, dist=&lt;m&gt;, moving=0|1, vac=0|1 (remote vac cone on/off).
 /// Also writes UserData/Lycoreia/test-animclips.txt (all loaded AnimationClips) once.
 /// </summary>
 internal static class TestAvatarRig
 {
     private const string AvatarId = "TEST_AVATAR";
     private static readonly string? ControlPath = Environment.GetEnvironmentVariable("LYCOREIA_TEST_AVATAR");
+    internal static bool Enabled => !string.IsNullOrEmpty(ControlPath);
 
     private static NetworkPlayer? avatar;
     private static Camera? debugCamera;
@@ -29,6 +30,9 @@ internal static class TestAvatarRig
     private static string view = "front";
     private static float distance = 2.6f;
     private static bool moving;
+    private static bool vacOn;
+    private static float baseYaw;
+    private static uint vacPoseSequence;
     private static float focusHeight = 1.05f;
     private static float orbitOverride = float.NaN;
     private static string focusBone = string.Empty;
@@ -107,6 +111,29 @@ internal static class TestAvatarRig
                 case "dist": float.TryParse(value, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out distance); break;
                 case "moving": moving = value == "1"; break;
+                case "here" when avatar && value == "1":
+                    var scene = SceneContext.Instance;
+                    var flat = Vector3.ProjectOnPlane(scene.player.transform.forward, Vector3.up).normalized;
+                    anchor = scene.player.transform.position + flat * 4f;
+                    anchorYaw = Quaternion.LookRotation(flat).eulerAngles.y;
+                    baseYaw = anchorYaw;
+                    SrLogger.LogMessage($"[test-avatar] moved to {anchor} yaw={anchorYaw:F0}");
+                    break;
+                case "face" when avatar:
+                    if (float.TryParse(value, System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out var face))
+                        anchorYaw = baseYaw + face;
+                    break;
+                case "foliage":
+                    float.TryParse(value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out SR2MP.Components.FX.RemoteVacuumFoliage.TestStrengthScale);
+                    break;
+                case "vac":
+                    vacOn = value == "1";
+                    SR2MP.Components.FX.RemoteVacuumSuctionFX.SetSuction(AvatarId, value == "1", out var vacResult);
+                    SrLogger.LogMessage($"[test-avatar] vac={value}: {vacResult}");
+                    break;
                 case "focus": focusBone = value == "body" ? string.Empty : value; break;
                 case "focusY": float.TryParse(value, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out focusHeight); break;
@@ -152,8 +179,18 @@ internal static class TestAvatarRig
         model.ForwardSpeed = moving ? 6f : 0f;
         model.ForwardMovement = moving ? 1f : 0f;
 
+        if (vacOn)
+        {
+            // Stand-in for the network pose: body-relative nozzle aimed along the look pitch.
+            SR2MP.Components.FX.RemoteVacuumSuctionFX.ApplySuctionPose(AvatarId, unchecked(++vacPoseSequence),
+                new Vector3(0.25f, 1.1f, 0.6f), Quaternion.Euler(90f + pitch, 0f, 0f)); // aim = local up
+        }
+
         if (!debugCamera)
             return;
+        // Same layers as the player camera (hides the environment-interaction-only particles).
+        if (Camera.main && Camera.main != debugCamera)
+            debugCamera.cullingMask = Camera.main.cullingMask;
 
         var avatarRotation = Quaternion.Euler(0f, anchorYaw, 0f);
         var orbitYaw = view switch

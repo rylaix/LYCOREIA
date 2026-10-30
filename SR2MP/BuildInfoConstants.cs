@@ -14,8 +14,8 @@ internal static class BuildInfo
     // Version is shown by Starlight
     // Release builds are stamped by tools/set-version.sh (GitHub Action "Build release")
     internal const string MelonVersion = "1.0.0";
-    internal const string Version = "1.0.0-rc.16"; // Auto-Dev_Do_not_remove
-    internal const string Discord = "https://discord.gg/nGyPFTdnCH";
+    internal const string Version = "1.0.0"; // Auto-Dev_Do_not_remove
+    internal const string Discord = "https://discord.gg/EvD7WhSwqh";
     internal const string SourceCode = "https://github.com/rylaix/Lycoreia";
     internal const string Nexus = "https://github.com/rylaix/Lycoreia/releases";
     internal const string Releases = "https://github.com/rylaix/Lycoreia/releases";

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0
+
+First stable release of Lycoreia. Same code as 1.0.0-rc.18, tested by the core team in two-player
+sessions; it includes everything from the release candidates below.
+
+### Added
+- Other players' vacuums now bend grass, flowers and plants for everyone, exactly like your own: the
+  game's native vac ripples (all five, with their own reach, size and force) are drawn along every
+  remote player's suction cone. Visual only, no extra network traffic.
+
+## 1.0.0-rc.17 – rc.18
+
+### Added
+- First version of the shared grass and flower bending for other players' vacuums (rc.17), then
+  matched to the native look, reach and force (rc.18).
+
 ## 1.0.0-rc.16
 
 ### Changed
@@ -74,7 +90,7 @@
   resources). They were treated as storable items, so the guest's pull was cancelled every time and
   only the host could pick them up.
 
-## 1.0.0-rc.1 — first Lycoreia release candidate
+## 1.0.0-rc.1: first Lycoreia release candidate
 
 Forked from **Ranching Together 0.3.9** (upstream revision `619bc4c`, 2026-09-24; credits in NOTICE.md).
 Compared with that version, Lycoreia adds 125 source files, changes 241 and removes 1.

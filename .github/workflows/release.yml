@@ -114,9 +114,9 @@ jobs:
             if [[ -n "$NOTES" ]]; then printf '%s\n\n' "$NOTES"; fi
             echo "**All players must use the same version ($VERSION).**"
             echo
-            echo "- \`Lycoreia-$VERSION.zip\` — for playing"
+            echo "- \`Lycoreia-$VERSION.zip\`: for playing"
             if [[ -d out/deeplog ]]; then
-              echo "- \`Lycoreia-$VERSION-deeplog.zip\` — writes detailed diagnostics; use it to report bugs"
+              echo "- \`Lycoreia-$VERSION-deeplog.zip\`: writes detailed diagnostics; use it to report bugs"
             fi
             echo
             echo "Install: copy \`Mods/SR2MP.dll\` into the game's \`Mods\` folder (replace any older SR2MP.dll)."

@@ -42,6 +42,7 @@ internal sealed class RemoteVacuumSuctionFX : MonoBehaviour
     private Vector3 remoteNozzlePosition;
     private Quaternion remoteNozzleRotation = Quaternion.identity;
     private MaterialPropertyBlock? nozzlePropertyBlock;
+    private readonly RemoteVacuumFoliage foliage = new();
     private Vector3 displayedLocalPosition;
     private Quaternion displayedLocalRotation = Quaternion.identity;
     private NetworkPlayer? remoteBody;
@@ -199,6 +200,11 @@ internal sealed class RemoteVacuumSuctionFX : MonoBehaviour
             {
                 if (!remotePlayer)
                     continue;
+#if SR2MP_TEST
+                // The offline avatar rig drives its own avatar's cone.
+                if (SR2MP.Shared.Utils.TestAvatarRig.Enabled)
+                    continue;
+#endif
                 var component = remotePlayer.GetComponent<RemoteVacuumSuctionFX>();
                 if (component)
                     component.StopSuction(out _);
@@ -299,6 +305,9 @@ internal sealed class RemoteVacuumSuctionFX : MonoBehaviour
             nozzlePropertyBlock.SetFloat(VacWindDistanceId, windDistance);
             renderer.SetPropertyBlock(nozzlePropertyBlock);
         }
+
+        // The vac origin's aim axis is its local up (its forward points down/back, see suction-pose-sent).
+        foliage.Update(nozzlePosition, visualInstance.transform.up, UnityEngine.Time.deltaTime);
     }
 
     private void FollowRemoteBody()
@@ -636,6 +645,7 @@ internal sealed class RemoteVacuumSuctionFX : MonoBehaviour
     {
         lifecycle.SetDesired(false);
         swayInitialized = false;
+        foliage.Reset();
         if (!visualInstance)
         {
             result = "already stopped";
