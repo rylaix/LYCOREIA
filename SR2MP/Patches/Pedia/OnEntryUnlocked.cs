@@ -1,0 +1,28 @@
+using HarmonyLib;
+using Il2CppMonomiPark.SlimeRancher.Pedia;
+using SR2MP.Packets.Pedia;
+
+namespace SR2MP.Patches.Pedia;
+
+[HarmonyPatch(typeof(PediaDirector), nameof(PediaDirector.Unlock), typeof(PediaEntry), typeof(bool))]
+internal static class OnEntryUnlocked
+{
+    public static void Prefix(PediaDirector __instance, PediaEntry entry, ref bool showPopup)
+    {
+        if (showPopup && __instance.IsUnlocked(entry))
+            showPopup = false;
+    }
+
+    public static void Postfix(PediaEntry entry, bool showPopup)
+    {
+        if (HandlingPacket) return;
+
+        var packet = new PediaUnlockPacket
+        {
+            ID = entry.PersistenceId,
+            Popup = showPopup
+        };
+
+        Main.SendToAllOrServer(packet);
+    }
+}

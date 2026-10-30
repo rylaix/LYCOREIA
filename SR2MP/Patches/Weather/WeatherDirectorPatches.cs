@@ -1,0 +1,24 @@
+using HarmonyLib;
+using Il2CppMonomiPark.SlimeRancher.Weather;
+using SR2MP.Server.Managers;
+
+namespace SR2MP.Patches.Weather;
+
+[HarmonyPatch(typeof(WeatherDirector), nameof(WeatherDirector.StopState))]
+[HarmonyPatch(typeof(WeatherDirector), nameof(WeatherDirector.RunState))]
+internal static class WeatherDirectorStatePatches
+{
+    public static bool Prefix()
+    {
+        WeatherUpdateHelper.EnsureLookupInitialized();
+        return !Main.Client.IsConnected || Main.Server.IsRunning || HandlingPacket;
+    }
+
+    public static void Postfix()
+    {
+        if (Main.Server.IsRunning && !HandlingPacket)
+        {
+            WeatherUpdateHelper.SendWeatherUpdate();
+        }
+    }
+}

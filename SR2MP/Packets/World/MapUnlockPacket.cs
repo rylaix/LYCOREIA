@@ -1,0 +1,16 @@
+using SR2MP.Packets.Utils;
+
+namespace SR2MP.Packets.World;
+
+internal sealed class MapUnlockPacket : IPacket
+{
+    public string NodeID;
+
+    public PacketType Type => PacketType.MapUnlock;
+    public PacketReliability Reliability => PacketReliability.Reliable;
+    public NetworkChannel Channel => NetworkChannel.WorldState;
+
+    public void Serialise(PacketWriter writer) => writer.WriteString(NodeID);
+
+    public void Deserialise(PacketReader reader) => NodeID = reader.ReadPooledString()!;
+}

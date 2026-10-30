@@ -1,0 +1,244 @@
+﻿using System.Runtime.InteropServices;
+using MelonLoader;
+// ReSharper disable InconsistentNaming
+
+namespace SR2MP;
+
+internal static class StartupCheck
+{
+    private const string RequiredGameVersion = BuildInfo.ExactGameVersion;
+    private const string VersionUrl = "https://raw.githubusercontent.com/pyeight/SlimeRancher2Multiplayer/refs/heads/master/latestModVersion.txt";
+    private const string DiscordUrl = BuildInfo.Discord;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr ShellExecuteW(
+        IntPtr hwnd,
+        string lpOperation,
+        string lpFile,
+        string lpParameters,
+        string lpDirectory,
+        int nShowCmd
+    );
+
+    private const uint MB_OK = 0x00000000;
+    private const uint MB_ICON_ERROR = 0x00000010;
+    private const uint MB_ICON_WARNING = 0x00000030;
+    private const int SW_SHOW_NORMAL = 1;
+    private const float TIMEOUT = 30f;
+
+    private static volatile bool shouldQuit;
+
+    public static void Initialize()
+    {
+        if (DevMode)
+        {
+            for (var i = 0; i <= 100; i++)
+            {
+                SrLogger.LogWarning("DEV BUILD!");
+            }
+
+            Task.Run(async () => await CheckDevBuildVersionAsync());
+            return;
+        }
+
+        var installedGameVersion = MelonLoader.InternalUtils.UnityInformationHandler.GameVersion;
+
+        var versionParts = installedGameVersion.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (versionParts.Length > 0)
+        {
+            installedGameVersion = versionParts[0];
+        }
+
+        switch (CompareVersions(installedGameVersion, RequiredGameVersion))
+        {
+            case < 0:
+                ShowMessageBox(
+                    "SR2MP is incompatible with this game version.\n\n" +
+                    $"Required: {RequiredGameVersion}\n" +
+                    $"Detected: {installedGameVersion}",
+                    "SR2MP – Incompatible Game Version",
+                    MB_OK | MB_ICON_ERROR, true
+                );
+                Application.Quit();
+                return;
+            case > 0:
+                ShowMessageBox(
+                    "You are running a newer game version than SR2MP was built for.\n\n" +
+                    $"Required: {RequiredGameVersion}\n" +
+                    $"Detected: {installedGameVersion}\n\n" +
+                    "The mod may still work, but issues are possible.",
+                    "SR2MP – Newer Game Version Detected",
+                    MB_OK | MB_ICON_WARNING, false
+                );
+                break;
+        }
+
+        Task.Run(async () => await CheckModVersionAsync());
+        StartCoroutine(QuitCoroutine());
+    }
+
+    private static System.Collections.IEnumerator QuitCoroutine()
+    {
+        var elapsed = 0f;
+
+        while (!shouldQuit && elapsed < TIMEOUT)
+        {
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        if (shouldQuit)
+        {
+            Application.Quit();
+        }
+    }
+
+    private static async Task CheckDevBuildVersionAsync()
+    {
+        try
+        {
+            // ReSharper disable once ShortLivedHttpClient
+            using var client = new HttpClient();
+            client.Timeout = TimeSpan.FromSeconds(5);
+
+            var currentModVersion = StripPreReleaseSuffix(BuildInfo.Version);
+            var latestVersion = (await client.GetStringAsync(VersionUrl)).Trim();
+
+            if (CompareVersions(currentModVersion, latestVersion) != 0)
+                return;
+
+            ShowMessageBox(
+                "There is a released build with this version number.\n\n" +
+                $"This is a dev build with version: {latestVersion}, " +
+                "which is already publicly released as a real update.\n\n",
+                "SR2MP – Dev Build On A Released Version",
+                MB_OK | MB_ICON_WARNING, false
+            );
+        }
+        catch (TaskCanceledException)
+        {
+            SrLogger.LogWarning("SR2MP dev build version check timed out");
+        }
+        catch (HttpRequestException ex)
+        {
+            SrLogger.LogWarning($"SR2MP dev build version check failed: Network error\n{ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            SrLogger.LogWarning($"Failed to check SR2MP dev build version\n{ex}");
+        }
+    }
+
+    private static string StripPreReleaseSuffix(string version)
+    {
+        var separator = version.IndexOf('-');
+        return separator < 0 ? version : version[..separator];
+    }
+
+    private static async Task CheckModVersionAsync()
+    {
+        try
+        {
+            // ReSharper disable once ShortLivedHttpClient
+            using var client = new HttpClient();
+            client.Timeout = TimeSpan.FromSeconds(5);
+
+            const string currentModVersion = BuildInfo.Version;
+            var latestVersion = (await client.GetStringAsync(VersionUrl)).Trim();
+
+            switch (CompareVersions(currentModVersion, latestVersion))
+            {
+                case < 0:
+                    ShowMessageBox(
+                        "Your SR2MP mod is outdated!\n\n" +
+                        $"Your version: {currentModVersion}\n" +
+                        $"Latest version: {latestVersion}\n\n" +
+                        "Click OK to join our Discord or get a new version from NexusMods.\n" +
+                        "The game will close after clicking OK.",
+                        "SR2MP – Update Available",
+                        MB_OK | MB_ICON_WARNING, true
+                    );
+
+                    OpenUrl(DiscordUrl);
+                    shouldQuit = true;
+                    break;
+
+                case > 0:
+                    ShowMessageBox(
+                        "Your SR2MP mod version is newer than the latest release.\n\n" +
+                        $"Your version: {currentModVersion}\n" +
+                        $"Latest version: {latestVersion}\n\n" +
+                        "This version is not officially supported and may not work correctly.",
+                        "SR2MP – Unsupported Version",
+                        MB_OK | MB_ICON_WARNING, false
+                    );
+                    break;
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            SrLogger.LogWarning("SR2MP version check timed out");
+        }
+        catch (HttpRequestException ex)
+        {
+            SrLogger.LogWarning($"SR2MP version check failed: Network error\n{ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            SrLogger.LogWarning($"Failed to check SR2MP version\n{ex}");
+        }
+    }
+
+    private static void ShowMessageBox(string text, string caption, uint type, bool error)
+    {
+        try
+        {
+            MessageBoxW(IntPtr.Zero, text, caption, type);
+
+            if (error)
+                SrLogger.LogError($"{caption}\n{text}");
+            else
+                SrLogger.LogWarning($"{caption}\n{text}");
+        }
+        catch (Exception ex)
+        {
+            SrLogger.LogError($"{caption}\n{text}\n{ex}");
+        }
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            ShellExecuteW(IntPtr.Zero, "open", url, null!, null!, SW_SHOW_NORMAL);
+        }
+        catch (Exception ex)
+        {
+            SrLogger.LogWarning($"Could not open URL: {url}\n{ex.Message}");
+        }
+    }
+
+    private static int CompareVersions(string version1, string version2)
+    {
+        var v1Parts = version1.Split('.');
+        var v2Parts = version2.Split('.');
+        var maxLength = Math.Max(v1Parts.Length, v2Parts.Length);
+
+        for (var i = 0; i < maxLength; i++)
+        {
+            var v1 = i < v1Parts.Length && int.TryParse(v1Parts[i], out var v1Val) ? v1Val : 0;
+            var v2 = i < v2Parts.Length && int.TryParse(v2Parts[i], out var v2Val) ? v2Val : 0;
+
+            if (v1 < v2)
+                return -1;
+
+            if (v1 > v2)
+                return 1;
+        }
+
+        return 0;
+    }
+}

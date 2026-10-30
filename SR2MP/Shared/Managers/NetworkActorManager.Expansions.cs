@@ -1,0 +1,280 @@
+using System.Collections;
+using System.Net;
+using Il2CppMonomiPark.SlimeRancher.DataModel;
+using Il2CppMonomiPark.SlimeRancher.Player.PlayerItems;
+using Il2CppMonomiPark.SlimeRancher.Slime;
+using Il2CppMonomiPark.SlimeRancher.VFX;
+using SR2MP.Components.Actor;
+using SR2MP.Packets.Actor;
+
+namespace SR2MP.Shared.Managers;
+
+internal sealed partial class NetworkActorManager
+{
+    public void RegisterSpawnOverNetwork(GameObject actor)
+    {
+        if (!actor) return;
+        if (actor.GetComponent<NetworkActor>() != null) return;
+
+        var identifiableActor = actor.GetComponent<IdentifiableActor>();
+        if (!identifiableActor) return;
+
+        var model = identifiableActor._model;
+        if (model == null) return;
+        if (NetworkDroneManager.IsDroneModel(model)) return;
+
+        var networkActor = actor.AddComponent<NetworkActor>();
+        networkActor.LocallyOwned = true;
+        networkActor.CurrentOwnerId = LocalID;
+
+        Actors[model.actorId.Value] = model;
+
+        var packet = new ActorSpawnPacket
+        {
+            ActorId = identifiableActor.GetActorId(),
+            ActorType = GetPersistentID(actor.GetComponent<Identifiable>().identType),
+            SceneGroup = (byte)NetworkSceneManager.GetPersistentID(model.sceneGroup),
+            Position = actor.transform.position,
+            Rotation = actor.transform.rotation,
+            SpawnType = (byte)ActorSpawnType.Actor,
+            OwnerId = LocalID
+        };
+
+        var slimeModel = model.TryCast<SlimeModel>();
+        if (slimeModel != null)
+        {
+            packet.SpawnType = (byte)ActorSpawnType.Slime;
+            packet.Emotions = slimeModel.Emotions;
+            packet.Sleeping = slimeModel.isSleeping;
+            packet.FirstAppearance = slimeModel.firstAppearanceSaveSet;
+            packet.SecondAppearance = slimeModel.secondAppearanceSaveSet;
+            packet.Radiancy = (byte)ActorAppearanceType.Default;
+        }
+
+        Main.SendToAllOrServer(packet);
+    }
+    
+    internal void SendActorTypeRegistry(IPEndPoint clientEndPoint)
+    {
+        if (!Main.Server.IsRunning) return;
+
+        var packet = new ActorTypeRegistryPacket
+        {
+            Registry = new Dictionary<int, string>(ActorTypes.Count)
+        };
+
+        foreach (var (persistentId, type) in ActorTypes)
+        {
+            if (type == null) continue;
+            packet.Registry[persistentId] = type.ReferenceId;
+        }
+
+        Main.Server.SendToClient(packet, clientEndPoint);
+    }
+    
+    internal static bool ApplyRadiancy(SlimeModel slime, ActorAppearanceType radiancy = ActorAppearanceType.Default)
+    {
+        if (slime == null) return false;
+        
+        var gameObj = slime.GetGameObject();
+        if (!gameObj) return false;
+        
+        var applicator = gameObj.GetComponent<SlimeAppearanceApplicator>();
+        if (!applicator) return false;
+        
+        var def = gameObj.GetComponent<Identifiable>().identType.TryCast<SlimeDefinition>();
+        if (!def) return false;
+        
+        if (radiancy == ActorAppearanceType.Default && slime.IsRadiant)
+        {
+            if (def!.RadiantBase && def.RadiantBase.AppearType == SlimeAppearance.AppearanceType.RADIANT_BASE)
+                radiancy = ActorAppearanceType.BaseRadiant;
+            else if (def.RadiantLargo0 &&
+                     def.RadiantLargo0.AppearType == SlimeAppearance.AppearanceType.RADIANT_LARGO_0)
+                radiancy = ActorAppearanceType.LargoRadiant0;
+            else if (def.RadiantLargo1 &&
+                     def.RadiantLargo1.AppearType == SlimeAppearance.AppearanceType.RADIANT_LARGO_1)
+                radiancy = ActorAppearanceType.LargoRadiant1;
+        }
+        
+        var newAppearance = radiancy switch
+        {
+            ActorAppearanceType.BaseRadiant => def!.RadiantBase,
+            ActorAppearanceType.LargoRadiant0 => def!.RadiantLargo0,
+            ActorAppearanceType.LargoRadiant1 => def!.RadiantLargo1,
+            _ => applicator.Appearance
+        };
+        
+        if (!newAppearance) return false;
+        
+        var slimeRadiant = gameObj.GetComponent<SlimeRadiant>();
+        if (slimeRadiant)
+        {
+            slimeRadiant.SetRadiant();
+            slimeRadiant.SetRadiantAppearance();
+        }
+        
+        slime.GetAmmoMetadata().Radiant = true;
+        applicator.Appearance = newAppearance;
+        applicator.ApplyAppearance();
+        applicator.HandleChosenAppearanceChanged(def, newAppearance);
+        
+        return true;
+    }
+    
+    private static IEnumerator EnsureSlimeAppearance(SlimeModel slime)
+    {
+        yield return new WaitFrames(2);
+
+        if (slime == null) yield break;
+
+        var gameObj = slime.GetGameObject();
+        if (!gameObj) yield break;
+
+        var applicator = gameObj.GetComponent<SlimeAppearanceApplicator>();
+        if (!applicator || applicator.Appearance) yield break;
+
+        if (slime.IsRadiant && ApplyRadiancy(slime)) yield break;
+
+        var def = gameObj.GetComponent<Identifiable>()?.identType.TryCast<SlimeDefinition>();
+        if (!def) yield break;
+
+        var appearance = def!.IsLargo
+            ? def.GetLargoAppearance(slime.firstAppearanceSaveSet, slime.secondAppearanceSaveSet)
+            : def.GetAppearanceForSet(slime.firstAppearanceSaveSet);
+
+        if (!appearance)
+            appearance = SceneContext.Instance?.SlimeAppearanceDirector?.GetChosenSlimeAppearance(def);
+
+        if (!appearance)
+            appearance = def.GetDefaultAppearance();
+
+        if (!appearance) yield break;
+
+        applicator.Appearance = appearance;
+        applicator.ApplyAppearance();
+    }
+
+    internal static IEnumerator ApplySprinkleMaterial(GameObject gameObj, SprinkleMaterialType material)
+    {
+        yield return new WaitFrames(2);
+        
+        if (!gameObj) yield break;
+        
+        var sprinkle = gameObj.GetComponent<RandomMaterial>();
+        if (!sprinkle) yield break;
+
+        sprinkle.SetMaterial((int)material);
+    }
+
+    internal static void ApplyOwnership(ActorTransferPacket packet)
+    {
+        if (!ActorManager.Actors.TryGetValue(packet.ActorId.Value, out var actor))
+            return;
+
+        if (!actor.TryGetNetworkComponent(out var component))
+            return;
+        
+        component.CurrentOwnerId = packet.OwnerId;
+
+        var locallyOwned = packet.OwnerId == LocalID;
+
+        if (!locallyOwned)
+        {
+            try
+            {
+                var player = SceneContext.Instance.Player;
+                var gameObject = actor.GetGameObject();
+
+                if (player && gameObject)
+                {
+                    var vacItem = player.GetComponent<PlayerItemController>()._vacuumItem;
+
+                    if (vacItem && vacItem._held == gameObject)
+                    {
+                        vacItem.LockJoint.connectedBody = null;
+                        vacItem._held = null;
+                        vacItem.SetHeldRad(0f);
+                        vacItem._vacMode = VacuumItem.VacMode.NONE;
+                        gameObject.GetComponent<Vacuumable>().Release();
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                SrLogger.LogDebug($"Failed to release actor from vacuum on ownership change: {exception.Message}");
+            }
+        }
+
+        component.LocallyOwned = locallyOwned;
+    }
+    
+    private static bool FreeActorIdForGadget(ActorId actorId, IdentifiableType incomingType)
+    {
+        try
+        {
+            if (GameState.TryGetIdentifiableModel(actorId, out var existing) && existing != null)
+            {
+                // Same gadget on the same id, not a collision.
+                // Respawning would drop links, we don't want that
+                if (existing.ident == incomingType || existing.ident?.IsPlayer == true)
+                    return false;
+
+                var gameObject = existing.GetGameObject();
+
+                NetworkGadgetManager.RemoveTeleporterGadget(existing);
+                NetworkGadgetManager.ForgetGadgetLink(actorId);
+
+                HandlingPacket = true;
+                if (gameObject)
+                    Destroyer.DestroyAny(gameObject, "SR2MP.RemoveExistingGadgetModel");
+                else
+                    GameState.DestroyIdentifiableModel(existing);
+                HandlingPacket = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            HandlingPacket = false;
+            SrLogger.LogWarning($"Failed to free actor id {actorId.Value} for an incoming gadget: {ex.Message}");
+        }
+
+        RemoveExistingGadgetModel(actorId);
+        return true;
+    }
+
+    internal static void RemoveExistingGadgetModel(ActorId actorId)
+    {
+        if (actorId.Value == 0) return;
+
+        try
+        {
+            foreach (var gadget in GameState.AllGadgets().ToArray())
+            {
+                if (gadget == null || gadget.actorId.Value != actorId.Value)
+                    continue;
+
+                var gameObject = gadget.GetGameObject();
+
+                NetworkGadgetManager.RemoveTeleporterGadget(gadget);
+                NetworkGadgetManager.ForgetGadgetLink(gadget.actorId);
+
+                HandlingPacket = true;
+                if (gameObject)
+                    Destroyer.DestroyGadget(gameObject, "SR2MP.RemoveExistingGadgetModel");
+                else
+                    GameState.DestroyGadgetModel(gadget);
+                HandlingPacket = false;
+                
+                var mapDirector = SceneContext.Instance?.MapDirector;
+                if (mapDirector != null)
+                    mapDirector.DeregisterMarker(gadget);
+            }
+        }
+        catch (Exception ex)
+        {
+            HandlingPacket = false;
+            SrLogger.LogWarning($"Failed to remove existing gadget model for {actorId.Value}: {ex.Message}");
+        }
+    }
+}

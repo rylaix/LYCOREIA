@@ -1,0 +1,25 @@
+using SR2MP.Packets.Utils;
+
+namespace SR2MP.Packets.Pedia;
+
+internal sealed class PediaUnlockPacket : IPacket
+{
+    public string ID;
+    public bool Popup;
+
+    public PacketType Type => PacketType.PediaUnlock;
+    public PacketReliability Reliability => PacketReliability.Reliable;
+    public NetworkChannel Channel => NetworkChannel.WorldState;
+
+    public void Serialise(PacketWriter writer)
+    {
+        writer.WriteString(ID);
+        writer.WriteBool(Popup);
+    }
+
+    public void Deserialise(PacketReader reader)
+    {
+        ID = reader.ReadPooledString()!;
+        Popup = reader.ReadBool();
+    }
+}

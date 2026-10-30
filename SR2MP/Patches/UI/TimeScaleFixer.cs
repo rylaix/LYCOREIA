@@ -1,0 +1,13 @@
+using HarmonyLib;
+using Il2CppMonomiPark.SlimeRancher.Script.UI.Pause;
+
+namespace SR2MP.Patches.UI;
+
+[HarmonyPatch(typeof(PauseMenuDirector), nameof(PauseMenuDirector.PauseGame))]
+internal static class TimeScaleFixer
+{
+    public static bool Prefix()
+    {
+        return !GameContext.Instance.InputDirector._paused.Map.enabled;
+    }
+}

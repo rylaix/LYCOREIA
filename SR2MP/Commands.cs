@@ -1,0 +1,262 @@
+using System.Net;
+using SR2MP.Components.UI;
+using SR2MP.Packets;
+using SR2MP.Shared.Managers;
+using SR2MP.Shared.Utils;
+
+namespace SR2MP;
+
+internal sealed class HostCommand : StarlightCommand
+{
+    private static Server.SR2MPServer? server;
+
+    public override string ID => "host";
+    public override string Usage => "host <port>";
+
+    public override bool Execute(string[] args)
+    {
+        if (args.Length < 1)
+        {
+            SendError("You need to specify a port!");
+            return false;
+        }
+        
+        MenuEUtil.CloseOpenMenu();
+        server = Main.Server;
+        server.Start(int.Parse(args[0]), true);
+        SrLogger.LogMessage("Host command executed!");
+        return true;
+    }
+}
+
+internal sealed class AutoHostCommand : StarlightCommand
+{
+    public override string ID => "autohost";
+    public override string Usage => "autohost";
+
+    public override bool Execute(string[] args)
+    {
+        MenuEUtil.CloseOpenMenu();
+        MultiplayerUI.Instance.StartAutoHost();
+        SrLogger.LogMessage("Autohost command executed!");
+        return true;
+    }
+}
+
+internal sealed class ManualCodeCommand : StarlightCommand
+{
+    public override string ID => "manualcode";
+    public override string Usage => "manualcode";
+
+    public override bool Execute(string[] args)
+    {
+        MenuEUtil.CloseOpenMenu();
+        MultiplayerUI.Instance.TriggerManualCode();
+        SrLogger.LogMessage("ManualCode command executed!");
+        return true;
+    }
+}
+
+internal sealed class ChatCommand : StarlightCommand
+{
+    public override string ID => "chat";
+    public override string Usage => "chat <message>";
+
+    public override bool Execute(string[] args)
+    {
+        if (args.Length < 1)
+        {
+            SendError("Input a chat message first!");
+            return false;
+        }
+
+        var msg = string.Join(" ", args);
+
+        var chatPacket = new ChatMessagePacket
+        {
+            Username = Main.Username,
+            Message = msg
+        };
+
+        Main.SendToAllOrServer(chatPacket);
+
+        var messageId = $"{Main.Username}_{msg.GetHashCode()}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+
+        MultiplayerUI.Instance.RegisterChatMessage(msg, Main.Username, messageId);
+
+        SrLogger.LogMessage("Chat command executed!");
+        return true;
+    }
+}
+
+internal sealed class ConnectCommand : StarlightCommand
+{
+    public override string ID => "connect";
+    public override string Usage => "connect <ip/domain[:port]>";
+
+    public override bool Execute(string[] args)
+    {
+        MenuEUtil.CloseOpenMenu();
+
+        if (args.Length < 1)
+        {
+            SendError("Usage: connect <ip/domain[:port]>");
+            return false;
+        }
+
+        var input = args[0];
+        string ip;
+        int port;
+
+        if (input.Contains(':'))
+        {
+            var split = input.Split(':');
+            ip = split[0];
+
+            if (!int.TryParse(split[1], out port))
+                return false;
+        }
+        else
+        {
+            ip = input;
+            if (args.Length < 2 || !int.TryParse(args[1], out port))
+                return false;
+        }
+
+        if (ip.StartsWith("[") && ip.EndsWith("]"))
+        {
+            ip = ip[1..^1];
+        }
+
+        try
+        {
+            var addresses = Dns.GetHostAddresses(ip);
+            if (addresses.Length > 0)
+            {
+                ip = addresses[0].ToString();
+            }
+            else
+            {
+                SrLogger.LogWarning("IP address incorrect!", SrLogTarget.Both);
+                return false;
+            }
+        }
+        catch
+        {
+            SrLogger.LogWarning("IP address could not be resolved! (are you connected to the internet?)", SrLogTarget.Both);
+            return false;
+        }
+
+        SrLogger.LogMessage("Connect command executed!", SrLogTarget.Both);
+        Main.Client.Connect(ip, port);
+        return true;
+    }
+}
+
+internal sealed class ResyncAllCommand : StarlightCommand
+{
+    public override string ID => "resync";
+    public override string Usage => "resync";
+
+    public override bool Execute(string[] args)
+    {
+        if (Main.Client.IsConnected)
+            Main.Server.ReSyncManager.RequestResync();
+
+        if (Main.Server.IsRunning)
+            Main.Server.ReSyncManager.SynchronizeAll();
+
+        SrLogger.LogMessage("Resync command executed!", SrLogTarget.Both);
+        return true;
+    }
+}
+
+internal sealed class AddSprinklesCommand : StarlightCommand
+{
+    public override string ID => "addsprinkles";
+    public override string Usage => "addsprinkles <amount>";
+
+    public override bool Execute(string[] args)
+    {
+        if (Main.Client.IsConnected || Main.Server.IsRunning)
+        {
+            if (!Main.AllowCheats)
+            {
+                SendError("Cheats are disabled on this server!");
+                return false;
+            }
+        }
+        
+        if (args.Length < 1 || !int.TryParse(args[0], out var amount))
+        {
+            SendError("Usage: addsprinkles <amount>");
+            return false;
+        }
+
+        if (!Extensions.TryAddSprinkles(amount))
+        {
+            SendError("Could not add sprinkles");
+            return false;
+        }
+
+        SrLogger.LogMessage($"Added {amount} sprinkle(s)!");
+        return true;
+    }
+}
+
+public sealed class RemoveExceptionsCommand : StarlightCommand
+{
+    public override string ID => "removeexceptions";
+    public override string Usage => "removeexceptions";
+
+    public override bool Execute(string[] args)
+    {
+        Firewall.RemoveAllExceptions();
+        SrLogger.LogMessage("Removed all exceptions!", SrLogTarget.Both);
+        return true;
+    }
+}
+
+public sealed class ToggleGuiCommand : StarlightCommand
+{
+    public override string ID => "togglegui";
+    public override string Usage => "togglegui";
+
+    public override bool Execute(string[] args)
+    {
+        MultiplayerUI.Instance.HandleUIToggle(true);
+        SrLogger.LogMessage("toggled the gui (if the chat was not focussed)!");
+        return true;
+    }
+}
+
+public sealed class ToggleChatCommand : StarlightCommand
+{
+    public override string ID => "togglechat";
+    public override string Usage => "togglechat";
+
+    public override bool Execute(string[] args)
+    {
+        MultiplayerUI.Instance.HandleChatToggle(true);
+        SrLogger.LogMessage("toggled the chat!");
+        return true;
+    }
+}
+
+internal sealed class BackupSaveCommand : StarlightCommand
+{
+    public override string ID => "backupsave";
+    public override string Usage => "backupsave";
+
+    public override bool Execute(string[] args)
+    {
+        if (!SaveBackupManager.BackupNow())
+        {
+            SendError("Could not back up the save, see melonloader console for details.");
+            return false;
+        }
+
+        SrLogger.LogMessage($"Save backed up to {SaveBackupManager.BackupRoot}");
+        return true;
+    }
+}

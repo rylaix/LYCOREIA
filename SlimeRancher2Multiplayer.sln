@@ -1,0 +1,16 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SR2MP", "SR2MP\SR2MP.csproj", "{236B0ADD-5182-4534-B230-B2E4F7A7B09B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{236B0ADD-5182-4534-B230-B2E4F7A7B09B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{236B0ADD-5182-4534-B230-B2E4F7A7B09B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{236B0ADD-5182-4534-B230-B2E4F7A7B09B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{236B0ADD-5182-4534-B230-B2E4F7A7B09B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,30 @@
+﻿using HarmonyLib;
+using Il2CppMonomiPark.SlimeRancher.DataModel;
+using SR2MP.Packets.World;
+
+namespace SR2MP.Patches.Refinery;
+
+[HarmonyPatch(typeof(GadgetsModel), nameof(GadgetsModel.SetCount))]
+internal static class RefineryUpdate
+{
+    public static void Postfix(GadgetsModel __instance, IdentifiableType type, int newCount)
+    {
+        if (HandlingPacket)
+            return;
+
+        if (!Main.Server.IsRunning && !Main.Client.IsConnected)
+            return;
+        
+        if (SystemContext.Instance.SceneLoader.IsSceneLoadInProgress)
+            return;
+
+        var packet = new RefineryUpdatePacket
+        {
+            ItemCount = (ushort)newCount,
+            ItemID = GameContext.Instance.AutoSaveDirector._saveReferenceTranslation
+                ._identifiableTypeToPersistenceId.GetPersistenceId(type)
+        };
+
+        Main.SendToAllOrServer(packet);
+    }
+}
