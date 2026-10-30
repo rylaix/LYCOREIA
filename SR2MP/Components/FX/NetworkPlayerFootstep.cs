@@ -22,17 +22,36 @@ internal sealed class NetworkPlayerFootstep : MonoBehaviour
     [UsedImplicitly]
     public void Awake()
     {
-        SpawnAtTransform = transform.GetChild(2);
-        FootstepFX = FXManager.FootstepFX;
+        SpawnAtTransform = transform.childCount > 2 ? transform.GetChild(2) : transform;
+        TryInitializeFootsteps();
+    }
+
+    private bool TryInitializeFootsteps()
+    {
+        if (!SpawnAtTransform)
+            return false;
+
+        if (FootstepFXInstance)
+            return footstepParticles;
+
+        FootstepFX ??= FXManager.FootstepFX;
+        if (!FootstepFX)
+            return false;
 
         FootstepFXInstance = Instantiate(FootstepFX, SpawnAtTransform.position, SpawnAtTransform.rotation);
-        FootstepFXInstance.transform.SetParent(SpawnAtTransform.transform);
+        if (!FootstepFXInstance)
+            return false;
 
+        FootstepFXInstance.transform.SetParent(SpawnAtTransform, false);
         footstepParticles = FootstepFXInstance.GetComponentInChildren<ParticleSystem>();
+        return footstepParticles;
     }
 
     public void UpdateFXState()
     {
+        if (!footstepParticles && !TryInitializeFootsteps())
+            return;
+
         if (playerGrounded && !playerInWater)
             footstepParticles.Play(true);
         else
@@ -46,7 +65,8 @@ internal sealed class NetworkPlayerFootstep : MonoBehaviour
             return;
 
         playerInWater = true;
-        footstepParticles.Stop(true, ParticleSystemStopBehavior.StopEmitting);
+        if (footstepParticles)
+            footstepParticles.Stop(true, ParticleSystemStopBehavior.StopEmitting);
     }
 
     [UsedImplicitly]
@@ -57,7 +77,7 @@ internal sealed class NetworkPlayerFootstep : MonoBehaviour
 
         playerInWater = false;
 
-        if (playerGrounded)
+        if (playerGrounded && footstepParticles)
             footstepParticles.Play(true);
     }
 
@@ -66,6 +86,9 @@ internal sealed class NetworkPlayerFootstep : MonoBehaviour
 
     public void Update()
     {
+        if (!footstepParticles && !TryInitializeFootsteps())
+            return;
+
         var isGrounded = CheckGrounded(GroundedLayer);
 
         if (isGrounded == playerGrounded)

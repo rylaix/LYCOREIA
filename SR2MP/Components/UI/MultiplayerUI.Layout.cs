@@ -5,7 +5,6 @@ namespace SR2MP.Components.UI;
 internal sealed partial class MultiplayerUI
 {
     private Rect previousLayoutRect;
-    private Rect previousLayoutChatRect;
     private int previousLayoutHorizontalIndex;
 
     private void DrawText(string text, int horizontalShare = 1, int horizontalIndex = 0)

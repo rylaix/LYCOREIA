@@ -417,3 +417,21 @@ ExternalAnnotations/
 .vscode/
 cspell.json
 libraries
+# --- Lycoreia: never publish these ---
+# Game / MelonLoader / Starlight reference assemblies (not redistributable)
+SR2MP/libraries/
+reference-libs*.zip
+# Build output
+out/
+dist/
+builds/
+# Test sessions, logs and saves (contain IPs, player IDs, save data)
+evidence/
+test/
+*.jsonl
+*.jsonl.*
+latest.log*
+sensitive.log*
+UserData/
+SaveBackups/
+vac-palette.txt

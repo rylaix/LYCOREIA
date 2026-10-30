@@ -13,26 +13,38 @@ internal sealed class InitialAccessDoorsHandler : BasePacketHandler<InitialAcces
     protected override bool Handle(InitialAccessDoorsPacket packet, IPEndPoint? _)
     {
         var gameModel = GameState;
-
-        foreach (var door in packet.Doors)
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
         {
-            if (gameModel.doors.TryGetValue(door.ID, out var doorModel))
+            foreach (var door in packet.Doors)
             {
-                doorModel.state = door.State;
-
-                if (doorModel.gameObj)
-                    doorModel.gameObj.GetComponent<AccessDoor>().CurrState = doorModel.state;
-            }
-            else
-            {
-                doorModel = new AccessDoorModel
+                if (gameModel.doors.TryGetValue(door.ID, out var doorModel))
                 {
-                    gameObj = null,
-                    state = door.State
-                };
+                    doorModel.state = door.State;
 
-                gameModel.doors.Add(door.ID, doorModel);
+                    if (doorModel.gameObj)
+                    {
+                        var doorComponent = doorModel.gameObj.GetComponent<AccessDoor>();
+                        if (doorComponent)
+                            doorComponent.CurrState = doorModel.state;
+                    }
+                }
+                else
+                {
+                    doorModel = new AccessDoorModel
+                    {
+                        gameObj = null,
+                        state = door.State
+                    };
+
+                    gameModel.doors.Add(door.ID, doorModel);
+                }
             }
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
         }
 
         return false;

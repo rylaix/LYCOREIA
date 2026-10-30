@@ -1,5 +1,6 @@
 using Starlight.Utils;
 using SR2MP.Components.FX;
+using Il2CppMonomiPark.SlimeRancher.Player.CharacterController.Abilities;
 
 namespace SR2MP.Shared.Managers;
 
@@ -63,13 +64,20 @@ internal sealed class RemoteFXManager
             var cueName = cue.name.Replace(' ', '_');
             AllCues.TryAdd(cueName, cue);
         }
+        var pulseWaveData = Resources.FindObjectsOfTypeAll<PulseWaveAbilityData>()
+            .FirstOrDefault(data => data && data.PulseFx);
+        var pulseWaveFX = pulseWaveData ? pulseWaveData.PulseFx : null;
+        if (!pulseWaveFX)
+            SrLogger.LogWarning("PulseWaveAbilityData.PulseFx was not loaded; remote vac shockwave visuals are unavailable.");
+
         PlayerFXMap = new Dictionary<PlayerFXType, GameObject>
         {
             { PlayerFXType.None, null! },
             { PlayerFXType.VacReject, AllFX["FX_vacReject"] },
             { PlayerFXType.VacAccept, AllFX["FX_vacAcquire"] },
             { PlayerFXType.VacShoot, AllFX["FX_VacpackShoot"] },
-            { PlayerFXType.WaterSplash, null! }
+            { PlayerFXType.WaterSplash, null! },
+            { PlayerFXType.VacShockwave, pulseWaveFX! }
         };
         PlayerAudioCueMap = new Dictionary<PlayerFXType, SECTR_AudioCue>
         {
@@ -107,6 +115,11 @@ internal sealed class RemoteFXManager
             if (!obj)
                 continue;
 
+            // PulseWaveAbilityBehavior.Start is the event producer for this one-shot effect.
+            // Auto-sending from the prefab's OnEnable would produce a duplicate packet.
+            if (playerFX == PlayerFXType.VacShockwave)
+                continue;
+
             // Please Az find a better way :sob:
             // Made slight improvements - Az
             foreach (var particle in resources.Where(x => x.name.Contains(obj.name)))
@@ -141,6 +154,7 @@ internal sealed class RemoteFXManager
                 cue.Value.Spatialization = SECTR_AudioCue.Spatializations.Occludable3D;
         }
 
+        RemoteVacuumSuctionFX.InitializeTemplate();
         SrLogger.LogMessage("RemoteFXManager initialized");
     }
 

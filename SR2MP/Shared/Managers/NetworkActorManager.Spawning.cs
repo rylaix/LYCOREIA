@@ -2,7 +2,9 @@ using Il2CppMonomiPark.SlimeRancher.DataModel;
 using SR2MP.Components.Actor;
 using SR2MP.Packets.Actor;
 using SR2MP.Packets.Loading;
+using SR2MP.Shared.Utils;
 using Unity.Mathematics;
+using UnityEngine;
 
 namespace SR2MP.Shared.Managers;
 
@@ -24,22 +26,44 @@ internal sealed partial class NetworkActorManager
         if (!ActorTypes.TryGetValue(typeId, out var type))
         {
             SrLogger.LogWarning($"Tried to spawn actor with an invalid type!\n\tActor {actorId.Value}: type_{typeId}");
+#if SR2MP_DEEPLOG || SR2MP_TEST
+            ActorDiag.Log("spawn-failed", actorId.Value, "reason=invalid-type", typeId, null, sceneId, position,
+                1000);
+#endif
             return false;
         }
         
         if (!type.prefab)
+        {
+#if SR2MP_DEEPLOG || SR2MP_TEST
+            ActorDiag.Log("spawn-failed", actorId.Value, "reason=no-prefab", typeId, null, sceneId, position,
+                1000);
+#endif
             return false;
+        }
         
         if (type.IsGadget())
             return TrySpawnNetworkGadget(actorId, position, rotation, typeId, sceneId, out model, chargeupTime);
 
         if (ActorIDAlreadyInUse(actorId))
+        {
+#if SR2MP_DEEPLOG || SR2MP_TEST
+            ActorDiag.Log("spawn-failed", actorId.Value, "reason=id-in-use", typeId, null, sceneId, position,
+                1000);
+#endif
             return false;
+        }
         
         model = GameState.CreateActorModel(actorId, type, scene, position, rotation).TryCast<IdentifiableModel>();
         
         if (model == null)
+        {
+#if SR2MP_DEEPLOG || SR2MP_TEST
+            ActorDiag.Log("spawn-failed", actorId.Value, "reason=create-model-null", typeId, null, sceneId, position,
+                1000);
+#endif
             return false;
+        }
         
         var slimeModel = model.TryCast<SlimeModel>();
         if (slimeModel != null)
@@ -60,9 +84,7 @@ internal sealed partial class NetworkActorManager
             GameState.identifiablesByIdent.Add(type, actors);
         }
         
-        HandlingPacket = true;
-        var actor = InstantiationHelpers.InstantiateActorFromModel(model.Cast<ActorModel>());
-        HandlingPacket = false;
+        var actor = InstantiateActorWithoutNetworkSync(model.Cast<ActorModel>());
         
         if (!actor)
             return true;
@@ -147,9 +169,7 @@ internal sealed partial class NetworkActorManager
             GameState.identifiablesByIdent.Add(type, actors);
         }
         
-        HandlingPacket = true;
-        var actor = InstantiationHelpers.InstantiateActorFromModel(model.Cast<ActorModel>());
-        HandlingPacket = false;
+        var actor = InstantiateActorWithoutNetworkSync(model.Cast<ActorModel>());
         
         if (!actor)
             return true;
@@ -217,9 +237,7 @@ internal sealed partial class NetworkActorManager
             GameState.identifiablesByIdent.Add(type, actors);
         }
         
-        HandlingPacket = true;
-        var actor = InstantiationHelpers.InstantiateActorFromModel(model.Cast<ActorModel>());
-        HandlingPacket = false;
+        var actor = InstantiateActorWithoutNetworkSync(model.Cast<ActorModel>());
         
         if (!actor)
             return true;
@@ -297,9 +315,7 @@ internal sealed partial class NetworkActorManager
             GameState.identifiablesByIdent.Add(type, actors);
         }
         
-        HandlingPacket = true;
-        var actor = InstantiationHelpers.InstantiateActorFromModel(model.Cast<ActorModel>());
-        HandlingPacket = false;
+        var actor = InstantiateActorWithoutNetworkSync(model.Cast<ActorModel>());
         
         if (!actor)
             return true;
@@ -382,9 +398,7 @@ internal sealed partial class NetworkActorManager
             GameState.identifiablesByIdent.Add(type, actors);
         }
         
-        HandlingPacket = true;
-        var actor = InstantiationHelpers.InstantiateActorFromModel(model.Cast<ActorModel>());
-        HandlingPacket = false;
+        var actor = InstantiateActorWithoutNetworkSync(model.Cast<ActorModel>());
 
         if (!actor)
             return true;
@@ -428,9 +442,16 @@ internal sealed partial class NetworkActorManager
             
             if (targetJoint != null)
             {
+                var wasHandlingPacket = HandlingPacket;
                 HandlingPacket = true;
-                cycle.Attach(targetJoint);
-                HandlingPacket = false;
+                try
+                {
+                    cycle.Attach(targetJoint);
+                }
+                finally
+                {
+                    HandlingPacket = wasHandlingPacket;
+                }
 
                 produceModel.state = state;
                 produceModel.progressTime = progress;
@@ -502,9 +523,7 @@ internal sealed partial class NetworkActorManager
             GameState.identifiablesByIdent.Add(type, actors);
         }
         
-        HandlingPacket = true;
-        var actor = InstantiationHelpers.InstantiateActorFromModel(model.Cast<ActorModel>());
-        HandlingPacket = false;
+        var actor = InstantiateActorWithoutNetworkSync(model.Cast<ActorModel>());
         
         if (!actor)
             return true;
@@ -521,5 +540,19 @@ internal sealed partial class NetworkActorManager
         StartCoroutine(ApplySprinkleMaterial(actor, (SprinkleMaterialType)actorData.MaterialIndex));
         
         return true;
+    }
+
+    private static GameObject InstantiateActorWithoutNetworkSync(ActorModel model)
+    {
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
+        {
+            return InstantiationHelpers.InstantiateActorFromModel(model);
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
     }
 }

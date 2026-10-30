@@ -1,4 +1,7 @@
+using SR2MP.Shared.Utils;
 using System.Text;
+using System.Diagnostics;
+using System.Text.Json;
 using JetBrains.Annotations;
 using MelonLoader;
 using MelonLoader.Logging;
@@ -53,18 +56,168 @@ public static class Logger
     private static readonly MelonLogger.Instance _melonLogger;
     private static readonly LogHandler _logHandler;
     private static readonly LogHandler _sensitiveLogHandler;
+    private static DiagnosticLogHandler? _diagnosticLogHandler;
+    private static readonly Stopwatch ProcessClock = Stopwatch.StartNew();
+    private static long _diagnosticSequence;
+    private static string _diagnosticHostId = string.Empty;
+    private static bool _diagnosticsEnabled;
+    private static readonly object PacketWindowLock = new();
+    private static readonly Dictionary<string, PacketWindow> PacketWindows = new();
+    private static long NextPacketWindowAtMs = 15_000;
 
     static Logger()
     {
-        _melonLogger = new MelonLogger.Instance("Ranching Together", ColorARGB.FromArgb(77, 149, 203));
+        _melonLogger = new MelonLogger.Instance(BuildInfo.Name, ColorARGB.FromArgb(77, 149, 203));
 
-        var folderPath = Path.Combine(MelonEnvironment.UserDataDirectory, "SR2MP");
+        var folderPath = ModPaths.DataDirectory;
 
         if (!Directory.Exists(folderPath))
             Directory.CreateDirectory(folderPath);
 
-        _logHandler = new LogHandler(Path.Combine(folderPath, "latest.log"));
-        _sensitiveLogHandler = new LogHandler(Path.Combine(folderPath, "sensitive.log"));
+        _logHandler = new LogHandler(Path.Combine(folderPath, "latest.log"), 8 * 1024 * 1024, 2);
+        _sensitiveLogHandler = new LogHandler(Path.Combine(folderPath, "sensitive.log"), 8 * 1024 * 1024, 2);
+    }
+
+    internal static bool DiagnosticsEnabled => _diagnosticsEnabled;
+
+    internal static void ConfigureDiagnostics(bool enabled)
+    {
+#if SR2MP_DEEPLOG
+        // Deep-log builds always record diagnostics, whatever the preference says.
+        enabled = true;
+#endif
+        _diagnosticsEnabled = enabled;
+        if (!enabled || _diagnosticLogHandler != null)
+            return;
+
+        var folderPath = ModPaths.DataDirectory;
+        Directory.CreateDirectory(folderPath);
+        _diagnosticLogHandler = new DiagnosticLogHandler(
+            Path.Combine(folderPath, "diagnostics.jsonl"), 8 * 1024 * 1024, 7);
+        LogDiagnostic("runtime", "diagnostics-started",
+            $"version={BuildInfo.Version}; processId={Environment.ProcessId}; processSessionId={Guid.NewGuid():N}");
+#if SR2MP_DEEPLOG
+        LogDiagnostic("session", "deeplog-started", DescribeDeepLogBuild());
+#endif
+    }
+
+#if SR2MP_DEEPLOG
+    private static string DescribeDeepLogBuild()
+    {
+        var flags = "DEEPLOG"
+#if SR2MP_TEST
+                    + ",TEST"
+#endif
+            ;
+        try
+        {
+            var path = typeof(Logger).Assembly.Location;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                return $"version={BuildInfo.Version}; flags={flags}; dll=<unavailable>";
+
+            var info = new FileInfo(path);
+            using var stream = File.OpenRead(path);
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.Create().ComputeHash(stream));
+            return $"version={BuildInfo.Version}; flags={flags}; dll={info.Name}; bytes={info.Length}; " +
+                   $"written={info.LastWriteTimeUtc:O}; sha256={hash}";
+        }
+        catch (Exception exception)
+        {
+            return $"version={BuildInfo.Version}; flags={flags}; dll=<error {exception.GetType().Name}>";
+        }
+    }
+#endif
+
+    internal static void SetDiagnosticHostId(string hostId)
+        => _diagnosticHostId = string.IsNullOrWhiteSpace(hostId) ? string.Empty : hostId;
+
+    internal static void RecordPacket(string direction, byte packetType, int bytes, ushort chunks)
+    {
+        if (!_diagnosticsEnabled)
+            return;
+
+        List<(string Key, PacketWindow Window)>? report = null;
+        var now = ProcessClock.ElapsedMilliseconds;
+        var typeName = Enum.GetName(typeof(SR2MP.Packets.Utils.PacketType), packetType) ?? $"Unknown_{packetType}";
+        lock (PacketWindowLock)
+        {
+            var key = $"{direction}:{typeName}";
+            if (!PacketWindows.TryGetValue(key, out var window))
+                window = new PacketWindow(direction, typeName);
+            window.Count++;
+            window.Bytes += Math.Max(0, bytes);
+            window.MaxChunks = Math.Max(window.MaxChunks, chunks);
+            PacketWindows[key] = window;
+
+            if (now >= NextPacketWindowAtMs)
+            {
+                report = PacketWindows.Select(pair => (pair.Key, pair.Value)).ToList();
+                PacketWindows.Clear();
+                NextPacketWindowAtMs = now + 15_000;
+            }
+        }
+
+        if (report == null)
+            return;
+        foreach (var (key, window) in report)
+            LogDiagnostic("network", "packet-window",
+                $"direction={window.Direction}; type={window.Type}; count={window.Count}; bytes={window.Bytes}; maxChunks={window.MaxChunks}");
+    }
+
+    internal static void RecordNetworkProblem(string direction, byte packetType, string reason)
+    {
+        var typeName = Enum.GetName(typeof(SR2MP.Packets.Utils.PacketType), packetType) ?? $"Unknown_{packetType}";
+        LogDiagnostic("network", "packet-rejected",
+            $"direction={direction}; type={typeName}; reason={reason}",
+            $"network-reject:{direction}:{packetType}:{reason}", 1000);
+    }
+
+    internal static void LogDiagnostic(string category, string eventName, string details,
+        string? rateKey = null, int minimumIntervalMilliseconds = 0)
+    {
+        if (!_diagnosticsEnabled || _diagnosticLogHandler == null)
+            return;
+
+        if (minimumIntervalMilliseconds > 0 && !DiagnosticRateLimit.TryAcquire(
+                rateKey ?? $"{category}:{eventName}", minimumIntervalMilliseconds))
+            return;
+
+        try
+        {
+            var server = Main.Server;
+            var client = Main.Client;
+            var role = server?.IsRunning == true ? "host" : client?.IsConnected == true ? "client" : "offline";
+            var localId = server?.IsRunning == true ? server.PlayerId : client?.PlayerId ?? string.Empty;
+            var hostId = server?.IsRunning == true ? server.PlayerId : _diagnosticHostId;
+            var sequence = Interlocked.Increment(ref _diagnosticSequence);
+            var dropped = _diagnosticLogHandler.TakeDroppedCount();
+            var record = new DiagnosticRecord(
+                DateTimeOffset.UtcNow.ToString("O"),
+                ProcessClock.ElapsedMilliseconds,
+                sequence,
+                hostId,
+                role,
+                localId,
+                category,
+                eventName,
+                details.Length <= 4096 ? details : details[..4096],
+                dropped);
+            _diagnosticLogHandler.TryWrite(JsonSerializer.Serialize(record));
+        }
+        catch (Exception exception)
+        {
+            if (Interlocked.Exchange(ref _diagnosticFailureReported, 1) == 0)
+                MelonLogger.Warning($"Development diagnostics disabled after write error: {exception.GetType().Name}");
+        }
+    }
+
+    private static int _diagnosticFailureReported;
+
+    internal static void FlushDiagnostics()
+    {
+        _diagnosticLogHandler?.Dispose();
+        _diagnosticLogHandler = null;
+        _diagnosticsEnabled = false;
     }
 
     /// <summary>
@@ -226,17 +379,29 @@ public static class Logger
 
     private sealed class LogHandler : IDisposable
     {
-        private readonly StreamWriter? _writer;
+        private StreamWriter? _writer;
         private readonly object _lock = new();
+        private readonly string _path;
+        private readonly long _maxBytes;
+        private readonly int _backupCount;
+        private long _currentBytes;
 
-        public LogHandler(string path)
+        public LogHandler(string path, long maxBytes, int backupCount)
         {
             try
             {
-                _writer = new StreamWriter(path, false, Encoding.UTF8) { AutoFlush = true };
+                _path = path;
+                _maxBytes = maxBytes;
+                _backupCount = backupCount;
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                RotateAtStartup();
+                OpenWriter();
             }
             catch (Exception ex)
             {
+                _path = path;
+                _maxBytes = maxBytes;
+                _backupCount = backupCount;
                 MelonLogger.Error($"Failed to initialize log file at {path}: {ex.Message}");
             }
         }
@@ -250,7 +415,18 @@ public static class Logger
             {
                 try
                 {
+                    var lineBytes = Encoding.UTF8.GetByteCount(line) + Environment.NewLine.Length;
+                    if (_currentBytes + lineBytes > _maxBytes)
+                    {
+                        Rotate();
+                        OpenWriter();
+                    }
+
+                    if (_writer == null)
+                        return;
                     _writer.WriteLine(line);
+                    _writer.Flush();
+                    _currentBytes += lineBytes;
                 }
                 catch
                 {
@@ -259,6 +435,127 @@ public static class Logger
             }
         }
 
-        public void Dispose() => _writer?.Dispose();
+        private void RotateAtStartup()
+        {
+            if (!File.Exists(_path) || new FileInfo(_path).Length == 0)
+                return;
+            RotateFiles();
+        }
+
+        private void Rotate()
+        {
+            _writer?.Dispose();
+            _writer = null;
+            RotateFiles();
+        }
+
+        private void RotateFiles()
+        {
+            for (var index = _backupCount; index >= 1; index--)
+            {
+                var source = index == 1 ? _path : $"{_path}.{index - 1}";
+                var destination = $"{_path}.{index}";
+                if (File.Exists(destination))
+                    File.Delete(destination);
+                if (File.Exists(source))
+                    File.Move(source, destination);
+            }
+        }
+
+        private void OpenWriter()
+        {
+            _writer = new StreamWriter(_path, false, new UTF8Encoding(false));
+            _currentBytes = 0;
+        }
+
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                _writer?.Dispose();
+                _writer = null;
+            }
+        }
+    }
+
+    private sealed record DiagnosticRecord(string Utc, long UptimeMs, long Sequence, string SessionId,
+        string Role, string LocalPeerId, string Category, string Event, string Details, int DroppedBefore);
+
+    private sealed class PacketWindow
+    {
+        internal PacketWindow(string direction, string type)
+        {
+            Direction = direction;
+            Type = type;
+        }
+
+        internal string Direction { get; }
+        internal string Type { get; }
+        internal long Count;
+        internal long Bytes;
+        internal ushort MaxChunks;
+    }
+
+    private sealed class DiagnosticLogHandler : IDisposable
+    {
+        private readonly System.Collections.Concurrent.BlockingCollection<string> _queue = new(2048);
+        private readonly LogHandler _writer;
+        private readonly System.Threading.Thread _thread;
+        private long _dropped;
+
+        internal DiagnosticLogHandler(string path, long maxBytes, int backupCount)
+        {
+            _writer = new LogHandler(path, maxBytes, backupCount);
+            _thread = new System.Threading.Thread(WriteLoop)
+            {
+                IsBackground = true,
+                Name = "Lycoreia diagnostics writer"
+            };
+            _thread.Start();
+        }
+
+        internal void TryWrite(string line)
+        {
+            if (!_queue.TryAdd(line))
+                Interlocked.Increment(ref _dropped);
+        }
+
+        internal int TakeDroppedCount() => (int)Math.Min(int.MaxValue, Interlocked.Exchange(ref _dropped, 0));
+
+        private void WriteLoop()
+        {
+            foreach (var line in _queue.GetConsumingEnumerable())
+                _writer.Write(line);
+        }
+
+        public void Dispose()
+        {
+            _queue.CompleteAdding();
+            if (!_thread.Join(TimeSpan.FromSeconds(3)))
+                _thread.Interrupt();
+            _writer.Dispose();
+            _queue.Dispose();
+        }
+    }
+
+    private static class DiagnosticRateLimit
+    {
+        private static readonly object Lock = new();
+        private static readonly Dictionary<string, long> LastTimestamp = new();
+
+        internal static bool TryAcquire(string key, int minimumIntervalMilliseconds)
+        {
+            var now = ProcessClock.ElapsedMilliseconds;
+            lock (Lock)
+            {
+                if (LastTimestamp.TryGetValue(key, out var last) &&
+                    now - last < minimumIntervalMilliseconds)
+                    return false;
+                LastTimestamp[key] = now;
+                if (LastTimestamp.Count > 4096)
+                    LastTimestamp.Clear();
+                return true;
+            }
+        }
     }
 }

@@ -84,20 +84,32 @@ internal static class NetworkPuzzleSlotManager
         if (model.filled == filled)
             return;
 
-        model.filled = filled;
-
-        // not loaded, let the game handle the visual
-        if (!model.gameObj)
-            return;
-
-        var slot = model.gameObj.GetComponent<PuzzleSlot>();
-        if (slot && filled)
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
         {
-            slot!.ActivateOnFill();
-            slot!._puzLockable?.NotifySlotChanged(false);
-        }
+            model.filled = filled;
 
-        model.NotifyParticipants();
+            // not loaded, let the game handle the visual
+            if (!model.gameObj)
+                return;
+
+            var slot = model.gameObj.GetComponent<PuzzleSlot>();
+            if (slot)
+            {
+                if (filled)
+                    slot!.ActivateOnFill();
+
+                // Puzzle locks also need to re-evaluate when a slot is cleared.
+                slot!._puzLockable?.NotifySlotChanged(false);
+            }
+
+            model.NotifyParticipants();
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
     }
 
     /// <summary>
@@ -115,6 +127,7 @@ internal static class NetworkPuzzleSlotManager
         if (model.filled == filled)
             return;
 
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
         try
         {
@@ -123,11 +136,13 @@ internal static class NetworkPuzzleSlotManager
             if (filled)
                 slot.ActivateOnFill();
 
+            slot._puzLockable?.NotifySlotChanged(false);
+
             model.NotifyParticipants();
         }
         finally
         {
-            HandlingPacket = false;
+            HandlingPacket = wasHandlingPacket;
         }
     }
 }

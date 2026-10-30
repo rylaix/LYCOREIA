@@ -1,4 +1,5 @@
 using Il2CppMonomiPark.SlimeRancher.Dialogue.CommStation;
+using SR2MP.Packets.Loading;
 using SR2MP.Packets.World;
 
 namespace SR2MP.Shared.Managers;
@@ -11,12 +12,12 @@ internal static class NetworkConversationManager
     {
         get
         {
-            if (conversationsByName != null)
-                return conversationsByName;
-
-            conversationsByName = new Dictionary<string, FixedConversation>();
+            conversationsByName ??= new Dictionary<string, FixedConversation>();
             foreach (var conversation in Resources.FindObjectsOfTypeAll<FixedConversation>())
-                conversationsByName[conversation.name] = conversation;
+            {
+                if (conversation != null && !string.IsNullOrWhiteSpace(conversation.name))
+                    conversationsByName[conversation.name] = conversation;
+            }
 
             return conversationsByName;
         }
@@ -34,9 +35,41 @@ internal static class NetworkConversationManager
         if (conversation?.HasBeenPlayed() != false)
             return;
 
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
-        conversation.RecordPlayed();
-        HandlingPacket = false;
+        try
+        {
+            conversation.RecordPlayed();
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
+    }
+
+    internal static void ReplacePlayedConversations(List<string?> conversationNames)
+    {
+        var table = SceneContext.Instance.eventDirector._model.table;
+        table.Remove("convoPlayed");
+        table.Remove("convoRancherPlayed");
+
+        var playedNames = new HashSet<string>(conversationNames.Where(name => !string.IsNullOrEmpty(name))!);
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
+        {
+            foreach (var conversation in ConversationsByName.Values)
+            {
+                if (playedNames.Contains(conversation.name) && !conversation.HasBeenPlayed())
+                    conversation.RecordPlayed();
+            }
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
+
+        SceneContext.Instance.eventDirector._model.NotifyParticipants();
     }
     
     internal static List<string?> GetPlayedConversations()

@@ -11,11 +11,7 @@ internal sealed class InitialConversationsHandler : BasePacketHandler<InitialCon
 {
     protected override bool Handle(InitialConversationsPacket packet, IPEndPoint? _)
     {
-        foreach (var name in packet.ConversationNames)
-        {
-            if (name != null)
-                NetworkConversationManager.ApplyConversationPlayed(name);
-        }
+        NetworkConversationManager.ReplacePlayedConversations(packet.ConversationNames);
 
         return false;
     }

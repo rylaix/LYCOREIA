@@ -8,8 +8,11 @@ namespace SR2MP.Server.Managers;
 internal static class WeatherUpdateHelper
 {
     private static bool lookupInitialized;
+    private static long nextRevision;
     private static readonly Dictionary<string, WeatherPatternDefinition> WeatherPatternsFromStateNames = new();
     private static readonly Dictionary<ZoneDefinition, Dictionary<string, WeatherPatternDefinition>> WeatherPatternsByZone = new();
+
+    internal static long NextRevision() => Interlocked.Increment(ref nextRevision);
 
     private static void CreateWeatherPatternLookup(WeatherRegistry registry)
     {

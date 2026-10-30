@@ -28,7 +28,7 @@ internal static class DiscordRPCManager
     }
 
     // This can be public, do not freak out :)
-    private const string DiscordAppID = "1422276739026911262";
+    private const string DiscordAppID = BuildInfo.DiscordAppID;
     private static DiscordRpcClient? rpcClient;
 
     private static readonly ReadOnlyDictionary<Zone, string> ZoneToStatus =
@@ -143,14 +143,14 @@ internal static class DiscordRPCManager
             Assets = new Assets
             {
                 LargeImageKey = icon,
-                LargeImageText = string.Empty
+                LargeImageText = $"{BuildInfo.Name} {BuildInfo.Version}"
             },
             Buttons = new[]
             {
                 new Button
                 {
-                    Label = "SR2 Multiplayer Discord",
-                    Url = "https://discord.gg/a7wfBw5feU"
+                    Label = $"{BuildInfo.Name} Discord",
+                    Url = BuildInfo.Discord
                 }
             }
         });

@@ -16,18 +16,26 @@ internal static partial class NetworkGadgetManager
     {
         gadget = null!;
 
+        var wasHandlingPacket = HandlingPacket;
+        GadgetModel? model;
         HandlingPacket = true;
-        var model = GameState.CreateGadgetModel(type.Cast<GadgetDefinition>(), actorId, scene, position, false);
-
-        if (model != null)
+        try
         {
-            model.eulerRotation = rotation.eulerAngles;
-            configure?.Invoke(model);
+            model = GameState.CreateGadgetModel(type.Cast<GadgetDefinition>(), actorId, scene, position, false);
 
-            if (NetworkSceneManager.IsSceneGroupLoaded(scene))
-                gadget = GadgetDirector.InstantiateGadgetFromModel(model);
+            if (model != null)
+            {
+                model.eulerRotation = rotation.eulerAngles;
+                configure?.Invoke(model);
+
+                if (NetworkSceneManager.IsSceneGroupLoaded(scene))
+                    gadget = GadgetDirector.InstantiateGadgetFromModel(model);
+            }
         }
-        HandlingPacket = false;
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
 
         if (gadget)
             gadget.transform.SetPositionAndRotation(position, rotation);
@@ -127,7 +135,8 @@ internal static partial class NetworkGadgetManager
         var partner = ResolveLinkedGadget(model);
         if (partner == null) return;
 
-        RecordGadgetLinkPair(model.actorId.Value, partner.actorId.Value);
+        if (!RecordGadgetLinkPair(model.actorId.Value, partner.actorId.Value))
+            return;
 
         Main.SendToAllOrServer(new GadgetLinkingPacket
         {
@@ -139,16 +148,47 @@ internal static partial class NetworkGadgetManager
     private static readonly Dictionary<long, long> PendingGadgetLinks = new();
 
     private static readonly Dictionary<long, long> GadgetLinkPartners = new();
+    private static readonly Dictionary<(long First, long Second, string Sender), PendingAuthorizedGadgetLink>
+        PendingAuthorizedGadgetLinks = new();
+    private static bool authorizedGadgetLinkPumpRunning;
+    private const float AuthorizedGadgetLinkTimeoutSeconds = 15f;
+    private const int MaxPendingAuthorizedGadgetLinks = 128;
+
+    private readonly record struct PendingAuthorizedGadgetLink(
+        long GadgetId,
+        long PartnerId,
+        string SenderId,
+        float ExpiresAt);
+
+    private enum GadgetLinkValidation
+    {
+        WaitingForActors,
+        Rejected,
+        Accepted
+    }
 
     internal static bool TryGetLinkedGadgetId(long gadgetId, out long partnerId)
         => GadgetLinkPartners.TryGetValue(gadgetId, out partnerId);
 
-    private static void RecordGadgetLinkPair(long gadgetId, long partnerId)
+    private static bool RecordGadgetLinkPair(long gadgetId, long partnerId)
     {
-        GadgetLinkPartners[gadgetId] = partnerId;
-        GadgetLinkPartners[partnerId] = gadgetId;
+        if (!GadgetLinkPairPolicy.TryRecordPair(
+                GadgetLinkPartners,
+                gadgetId,
+                partnerId,
+                out var detachedGadgetPartner,
+                out var detachedPartnerPartner))
+            return false;
+
+        if (detachedGadgetPartner != 0 && detachedGadgetPartner != partnerId)
+            NetworkAmmoManager.OnGadgetLinkResolved(detachedGadgetPartner, detachedGadgetPartner);
+
+        if (detachedPartnerPartner != 0 && detachedPartnerPartner != gadgetId
+            && detachedPartnerPartner != detachedGadgetPartner)
+            NetworkAmmoManager.OnGadgetLinkResolved(detachedPartnerPartner, detachedPartnerPartner);
 
         NetworkAmmoManager.OnGadgetLinkResolved(gadgetId, partnerId);
+        return true;
     }
 
     // Both are keyed by actor id and nothing else prunes them,
@@ -162,7 +202,10 @@ internal static partial class NetworkGadgetManager
         if (GadgetLinkPartners.Remove(id, out var partnerId)
             && GadgetLinkPartners.TryGetValue(partnerId, out var backReference)
             && backReference == id)
+        {
             GadgetLinkPartners.Remove(partnerId);
+            NetworkAmmoManager.OnGadgetLinkResolved(partnerId, partnerId);
+        }
 
         PendingGadgetLinks.Remove(id);
 
@@ -173,27 +216,208 @@ internal static partial class NetworkGadgetManager
         }
     }
 
-    internal static void ApplyGadgetLink(long gadgetId, long partnerId)
+    internal static bool ApplyGadgetLink(long gadgetId, long partnerId)
     {
-        RecordGadgetLinkPair(gadgetId, partnerId);
+        if (!RecordGadgetLinkPair(gadgetId, partnerId))
+            return false;
+
+        foreach (var (pendingGadgetId, pendingPartnerId) in PendingGadgetLinks.ToArray())
+        {
+            if (!GadgetLinkPairPolicy.IsCurrentPair(GadgetLinkPartners, pendingGadgetId, pendingPartnerId))
+                PendingGadgetLinks.Remove(pendingGadgetId);
+        }
 
         if (TryGetGadgetModel(gadgetId, out var gadgetModel) && TryGetGadgetModel(partnerId, out var partnerModel))
         {
+            PendingGadgetLinks.Remove(gadgetId);
+            PendingGadgetLinks.Remove(partnerId);
             ApplyResolvedLink(gadgetModel!, partnerModel!);
-            return;
+            return true;
         }
 
-        PendingGadgetLinks[gadgetId] = partnerId;
+        if (gadgetId < partnerId)
+            PendingGadgetLinks[gadgetId] = partnerId;
+        else
+            PendingGadgetLinks[partnerId] = gadgetId;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Validates both endpoints before a guest link mutates the host cache. Actor
+    /// spawn and link packets can arrive on different channels, so unknown endpoints
+    /// are deferred and revalidated after their canonical spawn/owner records arrive.
+    /// </summary>
+    internal static bool HandleGuestGadgetLink(long gadgetId, long partnerId, string senderId)
+    {
+        if (!Main.Server.IsRunning || string.IsNullOrWhiteSpace(senderId))
+            return false;
+
+        var validation = ValidateGuestGadgetLink(gadgetId, partnerId, senderId);
+        if (validation == GadgetLinkValidation.Rejected)
+        {
+            SrLogger.LogWarning(
+                $"Rejected GadgetLinking for {gadgetId}<->{partnerId} from {senderId}: " +
+                "both endpoints must exist, be owned by the sender, and form a compatible pair.");
+            return false;
+        }
+
+        if (validation == GadgetLinkValidation.Accepted)
+        {
+            CommitGuestGadgetLink(gadgetId, partnerId);
+            return false;
+        }
+
+        var key = (Math.Min(gadgetId, partnerId), Math.Max(gadgetId, partnerId), senderId);
+        if (gadgetId == 0 || partnerId == 0 || gadgetId == partnerId ||
+            PendingAuthorizedGadgetLinks.Count >= MaxPendingAuthorizedGadgetLinks)
+            return false;
+
+        if (!PendingAuthorizedGadgetLinks.ContainsKey(key))
+        {
+            PendingAuthorizedGadgetLinks[key] = new PendingAuthorizedGadgetLink(
+                gadgetId,
+                partnerId,
+                senderId,
+                UnityEngine.Time.unscaledTime + AuthorizedGadgetLinkTimeoutSeconds);
+        }
+
+        StartAuthorizedGadgetLinkPump();
+        return false;
+    }
+
+    private static GadgetLinkValidation ValidateGuestGadgetLink(long gadgetId, long partnerId, string senderId)
+    {
+        if (gadgetId == 0 || partnerId == 0 || gadgetId == partnerId ||
+            !PlayerManager.CheckPlayerExists(senderId))
+            return GadgetLinkValidation.Rejected;
+
+        var hasGadget = TryGetGadgetModel(gadgetId, out var gadgetModel);
+        var hasPartner = TryGetGadgetModel(partnerId, out var partnerModel);
+        if (!hasGadget || !hasPartner)
+        {
+            if (HasKnownForeignOwner(gadgetId, senderId) || HasKnownForeignOwner(partnerId, senderId))
+                return GadgetLinkValidation.Rejected;
+            return GadgetLinkValidation.WaitingForActors;
+        }
+
+        if (!ActorManager.OwnershipByActorId.TryGetValue(gadgetId, out var gadgetOwner) ||
+            !ActorManager.OwnershipByActorId.TryGetValue(partnerId, out var partnerOwner))
+            return GadgetLinkValidation.WaitingForActors;
+
+        var sourceKind = GetGadgetPairKind(gadgetModel!);
+        var partnerKind = GetGadgetPairKind(partnerModel!);
+        var sameDefinition = gadgetModel!.ident == partnerModel!.ident;
+        var compatible = GadgetLinkAuthorizationPolicy.AreCompatible(sourceKind, partnerKind, sameDefinition);
+        var accepted = GadgetLinkAuthorizationPolicy.CanAuthorize(
+            gadgetId,
+            partnerId,
+            authenticated: true,
+            sourceExists: true,
+            sourceOwned: string.Equals(gadgetOwner, senderId, StringComparison.Ordinal),
+            partnerExists: true,
+            partnerOwned: string.Equals(partnerOwner, senderId, StringComparison.Ordinal),
+            compatiblePair: compatible);
+
+        return accepted ? GadgetLinkValidation.Accepted : GadgetLinkValidation.Rejected;
+    }
+
+    private static bool HasKnownForeignOwner(long actorId, string senderId)
+        => ActorManager.OwnershipByActorId.TryGetValue(actorId, out var ownerId) &&
+           !string.Equals(ownerId, senderId, StringComparison.Ordinal);
+
+    private static GadgetPairKind GetGadgetPairKind(GadgetModel model)
+    {
+        if (model.TryCast<WarpDepotModel>(out _))
+            return GadgetPairKind.WarpDepot;
+        if (model.TryCast<LinkedCannonModel>(out _))
+            return GadgetPairKind.LinkedCannon;
+        if (model.TryCast<TeleporterGadgetModel>(out _) ||
+            model.TryCast<DroneStationGadgetModel>(out _) || !model.ident)
+            return GadgetPairKind.Unsupported;
+
+        var definition = model.ident!.TryCast<GadgetDefinition>();
+        if (definition == null ||
+            (!definition.BuyInPairs && !definition.LinkedDefinition &&
+             Math.Abs(definition.LinkedGadgetRange) <= 0.0001f))
+            return GadgetPairKind.Unsupported;
+
+        return GadgetPairKind.GenericLinked;
+    }
+
+    private static void CommitGuestGadgetLink(long gadgetId, long partnerId)
+    {
+        if (!ApplyGadgetLink(gadgetId, partnerId))
+            return;
+
+        Main.Server.SendToAll(new GadgetLinkingPacket
+        {
+            GadgetId = gadgetId,
+            PartnerId = partnerId
+        });
+    }
+
+    private static void StartAuthorizedGadgetLinkPump()
+    {
+        if (authorizedGadgetLinkPumpRunning || PendingAuthorizedGadgetLinks.Count == 0)
+            return;
+
+        authorizedGadgetLinkPumpRunning = true;
+        StartCoroutine(PumpAuthorizedGadgetLinks());
+    }
+
+    private static IEnumerator PumpAuthorizedGadgetLinks()
+    {
+        while (PendingAuthorizedGadgetLinks.Count > 0)
+        {
+            foreach (var (key, pending) in PendingAuthorizedGadgetLinks.ToArray())
+            {
+                if (!Main.Server.IsRunning ||
+                    UnityEngine.Time.unscaledTime >= pending.ExpiresAt ||
+                    !PlayerManager.CheckPlayerExists(pending.SenderId))
+                {
+                    PendingAuthorizedGadgetLinks.Remove(key);
+                    continue;
+                }
+
+                var validation = ValidateGuestGadgetLink(
+                    pending.GadgetId, pending.PartnerId, pending.SenderId);
+                if (validation == GadgetLinkValidation.WaitingForActors)
+                    continue;
+
+                PendingAuthorizedGadgetLinks.Remove(key);
+                if (validation == GadgetLinkValidation.Accepted)
+                    CommitGuestGadgetLink(pending.GadgetId, pending.PartnerId);
+                else
+                    SrLogger.LogWarning(
+                        $"Dropped deferred GadgetLinking {pending.GadgetId}<->{pending.PartnerId}: " +
+                        "canonical actor ownership or pair type did not validate.");
+            }
+
+            if (PendingAuthorizedGadgetLinks.Count > 0)
+                yield return new WaitForSecondsRealtime(0.25f);
+        }
+
+        authorizedGadgetLinkPumpRunning = false;
     }
 
     internal static void CheckPendingGadgetLink(GadgetModel? model)
     {
-        if (model == null || PendingGadgetLinks.Count == 0) return;
+        if (model == null) return;
+
+        ApplyPendingCannonFireTime(model);
+        if (PendingGadgetLinks.Count == 0) return;
 
         var id = model.actorId.Value;
 
         foreach (var (gadgetId, partnerId) in PendingGadgetLinks.ToArray())
         {
+            if (!GadgetLinkPairPolicy.IsCurrentPair(GadgetLinkPartners, gadgetId, partnerId))
+            {
+                PendingGadgetLinks.Remove(gadgetId);
+                continue;
+            }
+
             if (gadgetId != id && partnerId != id)
                 continue;
 

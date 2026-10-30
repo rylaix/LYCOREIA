@@ -8,7 +8,7 @@ internal sealed class CannonFirePacket : IPacket
     public double NextFireTime;
 
     public PacketType Type => PacketType.CannonFire;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

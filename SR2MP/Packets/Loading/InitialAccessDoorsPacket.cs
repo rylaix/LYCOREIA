@@ -26,7 +26,7 @@ internal sealed class InitialAccessDoorsPacket : IPacket
     public List<Door> Doors;
 
     public PacketType Type => PacketType.InitialAccessDoors;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer) => writer.WriteList(Doors, PacketWriterDels.NetObject<Door>.Writer);

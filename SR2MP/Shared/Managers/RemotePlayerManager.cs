@@ -117,6 +117,7 @@ public sealed class RemotePlayerManager
         player.LastLookY = player.LookY;
         player.LookY = lookY;
         player.SceneGroup = sceneGroup;
+        player.HasReceivedState = true;
 
         OnPlayerUpdated?.Invoke(playerId, player);
     }

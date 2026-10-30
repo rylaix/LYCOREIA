@@ -7,7 +7,7 @@ internal sealed class MarketPricePacket : IPacket
     public (float Current, float Previous)[] Prices;
 
     public PacketType Type => PacketType.MarketPriceChange;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.Economy;
 
     public void Serialise(PacketWriter writer) => writer.WriteArray(Prices, PacketWriterDels.Tuple<(float, float)>.Writer);

@@ -9,7 +9,7 @@ internal sealed class DroneOwnershipPacket : IPacket
     public string PreviousOwnerID = string.Empty;
 
     public PacketType Type => PacketType.DroneOwnership;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)
@@ -25,4 +25,25 @@ internal sealed class DroneOwnershipPacket : IPacket
         ClaimerID = reader.ReadPooledString()!;
         PreviousOwnerID = reader.ReadPooledString()!;
     }
+
+#if SR2MP_TEST
+    internal static bool VerifySerializationRoundTrip()
+    {
+        var expected = new DroneOwnershipPacket
+        {
+            StationId = 0x123456,
+            ClaimerID = "player-b",
+            PreviousOwnerID = "player-a"
+        };
+
+        using var writer = PacketWriter.Borrow();
+        expected.Serialise(writer);
+        using var reader = PacketReader.Borrow(writer.ToSpan().ToArray());
+        var actual = new DroneOwnershipPacket();
+        actual.Deserialise(reader);
+
+        return reader.BytesRemaining == 0 && actual.StationId == expected.StationId &&
+               actual.ClaimerID == expected.ClaimerID && actual.PreviousOwnerID == expected.PreviousOwnerID;
+    }
+#endif
 }

@@ -12,27 +12,36 @@ internal sealed class InitialPrismaBarriersHandler : BasePacketHandler<InitialPr
 {
     protected override bool Handle(InitialPrismaBarriersPacket packet, IPEndPoint? _)
     {
-        foreach (var barrier in packet.Barriers)
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
         {
-            if (GameState.AllPrismaBarriers().TryGetValue(barrier.ID, out var barrierModel))
+            foreach (var barrier in packet.Barriers)
             {
-                barrierModel.ActivationTime = barrier.ActivationTime;
-                if (barrierModel._gameObj)
+                if (GameState.AllPrismaBarriers().TryGetValue(barrier.ID, out var barrierModel))
                 {
-                    var barrierComponent = barrierModel._gameObj.GetComponent<PrismaBarrier>();
-                    if (barrierComponent)
-                        barrierComponent.SetActivationTime(barrier.ActivationTime);
+                    barrierModel.ActivationTime = barrier.ActivationTime;
+                    if (barrierModel._gameObj)
+                    {
+                        var barrierComponent = barrierModel._gameObj.GetComponent<PrismaBarrier>();
+                        if (barrierComponent)
+                            barrierComponent.SetActivationTime(barrier.ActivationTime);
+                    }
+                }
+                else
+                {
+                    barrierModel = new PrismaBarrierModel(barrier.ID)
+                    {
+                        _gameObj = null,
+                        ActivationTime = barrier.ActivationTime
+                    };
+                    GameState.AllPrismaBarriers().Add(barrier.ID, barrierModel);
                 }
             }
-            else
-            {
-                barrierModel = new PrismaBarrierModel(barrier.ID)
-                {
-                    _gameObj = null,
-                    ActivationTime = barrier.ActivationTime
-                };
-                GameState.AllPrismaBarriers().Add(barrier.ID, barrierModel);
-            }
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
         }
 
         return false;

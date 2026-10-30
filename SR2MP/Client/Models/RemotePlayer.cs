@@ -26,6 +26,13 @@ public sealed class RemotePlayer
     /// Gets the current rotation of the player.
     /// </summary>
     public float Rotation { get; internal set; }
+
+    /// <summary>
+    /// True after this peer has supplied its first authoritative world pose.
+    /// Remote renderers remain hidden before then so the prefab cannot flash at
+    /// the origin during initial join or reconnect.
+    /// </summary>
+    internal bool HasReceivedState { get; set; }
     
     /// <summary>
     /// Gets the current SceneGroup of the player.

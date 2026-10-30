@@ -16,9 +16,18 @@ internal static class OnDroneResourceUpdate
 
         try
         {
+            var sceneId = NetworkSceneManager.GetPersistentID(__instance.SceneGroup);
+            if (!NetworkDroneManager.TryGetUniqueOwnedExplorerStationInScene(LocalID, sceneId, out var stationId))
+            {
+                SrLogger.LogDebug(
+                    $"Skipped drone-resource update scene={sceneId}, index={index}: no unique locally owned ExplorerDrone station was available.");
+                return;
+            }
+
             Main.SendToAllOrServer(new DroneResourcePacket
             {
-                Scene = NetworkSceneManager.GetPersistentID(__instance.SceneGroup),
+                Scene = sceneId,
+                StationId = stationId,
                 Index = index,
                 Entry = NetworkDroneManager.CreateEntry(updatedData)
             });

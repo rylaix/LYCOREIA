@@ -23,8 +23,24 @@ internal static partial class NetworkGadgetManager
 
     private static void LinkWarpDepotModels(WarpDepotModel a, WarpDepotModel b)
     {
-        // Fancy, I know
+        if (a == null || b == null || a.actorId.Value == b.actorId.Value)
+            return;
+
+        // The host's pair mapping is authoritative; repair both directions even if a
+        // guest loaded a different stale link from its independent local save.
+        DetachReciprocalWarpDepotLink(a);
+        DetachReciprocalWarpDepotLink(b);
         a.linkedModel = b;
-        b.linkedModel ??= a;
+        b.linkedModel = a;
+    }
+
+    private static void DetachReciprocalWarpDepotLink(WarpDepotModel depot)
+    {
+        var previousPartner = depot.linkedModel;
+        depot.linkedModel = null;
+
+        if (previousPartner != null && previousPartner.actorId.Value != depot.actorId.Value &&
+            previousPartner.linkedModel != null && previousPartner.linkedModel.actorId.Value == depot.actorId.Value)
+            previousPartner.linkedModel = null;
     }
 }

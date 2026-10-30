@@ -25,7 +25,7 @@ internal sealed class InitialPrismaBarriersPacket : IPacket
     public List<Barrier> Barriers;
 
     public PacketType Type => PacketType.InitialPrismaBarriers;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer) => writer.WriteList(Barriers, PacketWriterDels.NetObject<Barrier>.Writer);

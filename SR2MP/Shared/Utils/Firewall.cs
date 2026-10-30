@@ -20,8 +20,8 @@ public static class Firewall
 
         var path = Process.GetCurrentProcess().MainModule?.FileName;
 
-        RunShell($"advfirewall firewall add rule name=\"SR2MP UDP In {port}\" dir=in action=allow protocol=UDP localport={port} program=\"{path}\" enable=yes");
-        RunShell($"advfirewall firewall add rule name=\"SR2MP UDP Out {port}\" dir=out action=allow protocol=UDP localport={port} program=\"{path}\" enable=yes");
+        RunShell($"advfirewall firewall add rule name=\"Lycoreia UDP In {port}\" dir=in action=allow protocol=UDP localport={port} program=\"{path}\" enable=yes");
+        RunShell($"advfirewall firewall add rule name=\"Lycoreia UDP Out {port}\" dir=out action=allow protocol=UDP localport={port} program=\"{path}\" enable=yes");
         AddPort(port);
         SrLogger.LogMessage($"Firewall: Added UDP exceptions for port {port}.");
     }
@@ -31,8 +31,8 @@ public static class Firewall
         if (!OperatingSystem.IsWindows())
             return;
 
-        RunShell($"advfirewall firewall delete rule name=\"SR2MP UDP In {port}\"");
-        RunShell($"advfirewall firewall delete rule name=\"SR2MP UDP Out {port}\"");
+        RunShell($"advfirewall firewall delete rule name=\"Lycoreia UDP In {port}\"");
+        RunShell($"advfirewall firewall delete rule name=\"Lycoreia UDP Out {port}\"");
         RemovePort(port);
         SrLogger.LogMessage($"Firewall: Removed UDP exceptions for port {port}.");
     }
@@ -52,8 +52,8 @@ public static class Firewall
         SrLogger.LogMessage($"Firewall: Removing {ports.Count} tracked exception(s): {string.Join(", ", ports)}");
         foreach (var port in ports)
         {
-            RunShell($"advfirewall firewall delete rule name=\"SR2MP UDP In {port}\"");
-            RunShell($"advfirewall firewall delete rule name=\"SR2MP UDP Out {port}\"");
+            RunShell($"advfirewall firewall delete rule name=\"Lycoreia UDP In {port}\"");
+            RunShell($"advfirewall firewall delete rule name=\"Lycoreia UDP Out {port}\"");
         }
 
         ClearPorts();

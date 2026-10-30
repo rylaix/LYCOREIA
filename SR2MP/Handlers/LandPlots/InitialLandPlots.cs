@@ -1,6 +1,7 @@
 using System.Net;
 using SR2MP.Components.LandPlots;
 using SR2MP.Handlers.Internal;
+using SR2MP.Packets.LandPlots;
 using SR2MP.Packets.Loading;
 using SR2MP.Packets.Utils;
 using SR2MP.Shared.Managers;
@@ -15,79 +16,185 @@ internal sealed class InitialLandPlotsHandler : BasePacketHandler<InitialLandPlo
 {
     protected override bool Handle(InitialLandPlotsPacket packet, IPEndPoint? _)
     {
+        var initializedMissingModels = 0;
+        var unresolvedModels = 0;
+
         foreach (var plot in packet.LandPlots)
         {
-            var model = GameState.landPlots[plot.ID];
+            if (!GameState.landPlots.TryGetValue(plot.ID, out var model) || model == null)
+            {
+                try
+                {
+                    // The guest may have loaded a less advanced save than the host.
+                    // Create the missing model now; LandPlotLocation.RegisterLandPlot
+                    // binds its scene object when that area is loaded later.
+                    model = GameState.InitializeLandPlotModel(plot.ID);
+                }
+                catch (Exception ex)
+                {
+                    unresolvedModels++;
+                    SrLogger.LogWarning(
+                        $"InitialLandPlots: could not initialize host plot '{plot.ID}': {ex.Message}");
+                    continue;
+                }
+
+                if (model == null)
+                {
+                    unresolvedModels++;
+                    SrLogger.LogWarning(
+                        $"InitialLandPlots: host plot '{plot.ID}' could not be initialized; skipping it.");
+                    continue;
+                }
+
+                initializedMissingModels++;
+#if SR2MP_TEST
+                if (Environment.GetEnvironmentVariable("SR2MP_TEST_TRACE_LANDPLOTS") == "1")
+                    SrLogger.LogMessage(
+                        $"[SR2MP_TEST] land-plot model initialized from host snapshot id={plot.ID}");
+#endif
+            }
 
             if (model.gameObj)
             {
+                var wasHandlingPacket = HandlingPacket;
                 HandlingPacket = true;
-                var location = model.gameObj.GetComponent<LandPlotLocation>();
-                var landPlotComponent = model.gameObj.GetComponentInChildren<LandPlot>(true);
-                location.Replace(landPlotComponent, GameContext.Instance.LookupDirector._plotPrefabDict[plot.Type]);
-
-                var landPlotComponent2 = model.gameObj.GetComponentInChildren<LandPlot>(true);
-                landPlotComponent2.ApplyUpgrades(plot.Upgrades.Cast<CppCollections.IEnumerable<LandPlot.Upgrade>>(), false);
-                HandlingPacket = false;
+                try
+                {
+                    var location = model.gameObj.GetComponent<LandPlotLocation>();
+                    var landPlotComponent = model.gameObj.GetComponentInChildren<LandPlot>(true);
+                    var plotPrefabs = GameContext.Instance.LookupDirector._plotPrefabDict;
+                    if (location && landPlotComponent && plotPrefabs.ContainsKey(plot.Type))
+                    {
+                        location.Replace(landPlotComponent, plotPrefabs[plot.Type]);
+                        var replacement = model.gameObj.GetComponentInChildren<LandPlot>(true);
+                        if (replacement)
+                            replacement.ApplyUpgrades(plot.Upgrades.Cast<CppCollections.IEnumerable<LandPlot.Upgrade>>(), false);
+                    }
+                    else
+                    {
+                        SrLogger.LogWarning($"InitialLandPlots: plot prefab or component missing for '{plot.ID}' ({plot.Type}).");
+                    }
+                }
+                finally
+                {
+                    HandlingPacket = wasHandlingPacket;
+                }
             }
 
             model.typeId = plot.Type;
             model.upgrades = plot.Upgrades;
 
+            if (plot.Data is InitialLandPlotsPacket.GardenData gardenSnapshot)
+            {
+                NetworkGardenManager.ApplySnapshotOwnership(gardenSnapshot.GardenId, gardenSnapshot.OwnerId);
+                NetworkGardenManager.ApplySnapshotState(
+                    plot.ID, ToGardenUpdate(gardenSnapshot), gardenSnapshot.HasState);
+
+                // A runtime plant/clear delta can be delivered before this plot model exists.
+                // Preserve its newer crop revision instead of letting the join snapshot roll it back.
+                gardenSnapshot.Crop = NetworkGardenManager.SelectSnapshotCrop(
+                    gardenSnapshot.GardenId, gardenSnapshot.Revision, gardenSnapshot.Crop) ?? int.MinValue;
+                plot.Data = gardenSnapshot;
+            }
+
             switch (plot.Data)
             {
-                case InitialLandPlotsPacket.GardenData { Crop: 9 }:
+                case InitialLandPlotsPacket.GardenData { Crop: 9 } garden:
                 {
                     model.resourceGrowerDefinition = null;
                     if (!model.gameObj)
                         continue;
                     var gardenPlot = model.gameObj.GetComponentInChildren<LandPlot>(true);
+                    var wasHandlingPacket = HandlingPacket;
                     HandlingPacket = true;
-                    gardenPlot.DestroyAttached();
-                    HandlingPacket = false;
+                    try
+                    {
+                        if (gardenPlot)
+                            gardenPlot.DestroyAttached();
+                    }
+                    finally
+                    {
+                        HandlingPacket = wasHandlingPacket;
+                    }
+                    break;
+                }
+
+                case InitialLandPlotsPacket.GardenData unknownCrop when unknownCrop.Crop == int.MinValue:
+                {
+                    SrLogger.LogWarning($"InitialLandPlots: could not resolve host crop for garden plot '{plot.ID}'; preserving the local crop.");
                     break;
                 }
 
                 case InitialLandPlotsPacket.GardenData garden:
                 {
-                    var actor = ActorManager.ActorTypes[garden.Crop];
-                    model.resourceGrowerDefinition =
-                        GameContext.Instance.AutoSaveDirector._saveReferenceTranslation._resourceGrowerTranslation
-                            .RawLookupDictionary._entries.FirstOrDefault(x =>
-                                x.value._primaryResourceType == actor)!.value;
+                    if (!ActorManager.ActorTypes.TryGetValue(garden.Crop, out var actor) || actor == null)
+                    {
+                        SrLogger.LogWarning($"InitialLandPlots: host crop ID {garden.Crop} is unknown for garden plot '{plot.ID}'; preserving the local crop.");
+                        break;
+                    }
+
+                    var saveReferenceTranslation = GameContext.Instance?.AutoSaveDirector?._saveReferenceTranslation;
+                    var translation = saveReferenceTranslation?._resourceGrowerTranslation?.RawLookupDictionary;
+                    if (translation == null)
+                    {
+                        SrLogger.LogWarning($"InitialLandPlots: resource grower translation is unavailable for garden plot '{plot.ID}'.");
+                        break;
+                    }
+
+                    var growerDefinition = translation._entries
+                        .FirstOrDefault(x => x.value != null && x.value._primaryResourceType == actor).value;
+                    if (growerDefinition == null)
+                    {
+                        SrLogger.LogWarning($"InitialLandPlots: no grower definition for host crop ID {garden.Crop} in plot '{plot.ID}'.");
+                        break;
+                    }
 
                     if (!model.gameObj)
-                        continue;
-
-                    var gardenCatcher = model.gameObj.GetComponentInChildren<GardenCatcher>();
-
-                    HandlingPacket = true;
-                    if (gardenCatcher.CanAccept(actor))
                     {
-                        var plantedObject = gardenCatcher.Plant(actor, true);
+                        model.resourceGrowerDefinition = growerDefinition;
+                        continue;
+                    }
 
-                        if (plantedObject != null)
+                    var gardenPlot = model.gameObj.GetComponentInChildren<LandPlot>(true);
+                    var existingSpawner = model.gameObj.GetComponentInChildren<SpawnResource>(true);
+                    var existingCrop = existingSpawner?._resourceGrowerDefinition?._primaryResourceType;
+
+                    var wasHandlingPacket = HandlingPacket;
+                    HandlingPacket = true;
+                    try
+                    {
+                        if (existingCrop != actor)
+                            gardenPlot?.DestroyAttached();
+
+                        model.resourceGrowerDefinition = growerDefinition;
+
+                        var gardenCatcher = model.gameObj.GetComponentInChildren<GardenCatcher>(true);
+                        if (gardenCatcher && gardenCatcher.CanAccept(actor))
                         {
-                            var spawnResource = plantedObject.GetComponent<SpawnResource>();
-                            if (spawnResource != null && spawnResource._model != null)
-                            {
-                                foreach (var joint in spawnResource.SpawnJoints)
-                                {
-                                    if (joint == null || joint.connectedBody == null)
-                                        continue;
+                            var plantedObject = gardenCatcher.Plant(actor, true);
 
-                                    var connectedObj = joint.connectedBody.gameObject;
-                                    Destroyer.Destroy(connectedObj, "InitialLandPlotsHandler.OnDestroy");
+                            if (plantedObject != null)
+                            {
+                                var spawnResource = plantedObject.GetComponent<SpawnResource>();
+                                if (spawnResource != null && spawnResource._model != null)
+                                {
+                                    foreach (var joint in spawnResource.SpawnJoints)
+                                    {
+                                        if (joint == null || joint.connectedBody == null)
+                                            continue;
+
+                                        var connectedObj = joint.connectedBody.gameObject;
+                                        Destroyer.Destroy(connectedObj, "InitialLandPlotsHandler.OnDestroy");
+                                    }
                                 }
                             }
                         }
                     }
-                    HandlingPacket = false;
+                    finally
+                    {
+                        HandlingPacket = wasHandlingPacket;
+                    }
                     
-                    var existingNetworkGarden = model.gameObj.GetComponentInChildren<NetworkGarden>(true);
-                    if (existingNetworkGarden != null)
-                        existingNetworkGarden.ApplyUpdate(garden.NextSpawnTime, garden.StoredWater, garden.NextSpawnRipens);
-
                     break;
                 }
 
@@ -113,7 +220,7 @@ internal sealed class InitialLandPlotsHandler : BasePacketHandler<InitialLandPlo
                 case InitialLandPlotsPacket.CoopPondData pond:
                 {
                     var ammoType = plot.Type == LandPlot.Id.COOP
-                        ? FeederAmmo
+                        ? CoopAmmo
                         : PlortCollectorAmmo;
                     var collectorAmmo = pond.CollectorAmmo!.ToGameAmmo();
                     model.siloAmmo[ammoType] = collectorAmmo._ammoModel;
@@ -172,10 +279,17 @@ internal sealed class InitialLandPlotsHandler : BasePacketHandler<InitialLandPlo
                         break;
                     }
 
+                    var wasHandlingPacket = HandlingPacket;
                     HandlingPacket = true;
-                    feeder?.SetFeederSpeed((SlimeFeeder.FeedSpeed)corral.AutoFeederSpeed);
-                    feeder?.SetFeederSpeedIcon((SlimeFeeder.FeedSpeed)corral.AutoFeederSpeed);
-                    HandlingPacket = false;
+                    try
+                    {
+                        feeder?.SetFeederSpeed((SlimeFeeder.FeedSpeed)corral.AutoFeederSpeed);
+                        feeder?.SetFeederSpeedIcon((SlimeFeeder.FeedSpeed)corral.AutoFeederSpeed);
+                    }
+                    finally
+                    {
+                        HandlingPacket = wasHandlingPacket;
+                    }
 
                     break;
                 }
@@ -202,6 +316,24 @@ internal sealed class InitialLandPlotsHandler : BasePacketHandler<InitialLandPlo
             }
         }
 
+#if SR2MP_TEST
+        if (Environment.GetEnvironmentVariable("SR2MP_TEST_TRACE_LANDPLOTS") == "1")
+            SrLogger.LogMessage(
+                $"[SR2MP_TEST] land-plots snapshot={packet.LandPlots.Count} " +
+                $"initializedMissing={initializedMissingModels} unresolved={unresolvedModels} " +
+                $"localModels={GameState.landPlots.Count}");
+#endif
+
         return false;
     }
+
+    private static GardenUpdatePacket.Entry ToGardenUpdate(InitialLandPlotsPacket.GardenData garden)
+        => new()
+        {
+            GardenId = garden.GardenId,
+            NextSpawnTime = garden.NextSpawnTime,
+            StoredWater = garden.StoredWater,
+            NextSpawnRipens = garden.NextSpawnRipens,
+            Revision = garden.Revision
+        };
 }

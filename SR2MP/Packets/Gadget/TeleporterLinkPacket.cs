@@ -9,7 +9,7 @@ internal sealed class TeleporterLinkPacket : IPacket
     public byte DestinationSceneGroup;
 
     public PacketType Type => PacketType.TeleporterLink;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

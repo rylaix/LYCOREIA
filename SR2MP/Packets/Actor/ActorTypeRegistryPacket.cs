@@ -7,7 +7,7 @@ internal struct ActorTypeRegistryPacket : IPacket
     public Dictionary<int, string> Registry;
 
     public readonly PacketType Type => PacketType.ActorTypeRegistry;
-    public readonly PacketReliability Reliability => PacketReliability.Reliable;
+    public readonly PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public readonly NetworkChannel Channel => NetworkChannel.ActorCritical;
 
     public readonly void Serialise(PacketWriter writer)

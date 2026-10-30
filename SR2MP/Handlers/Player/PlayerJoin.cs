@@ -50,6 +50,9 @@ internal sealed class ServerPlayerJoinHandler : BasePlayerJoinHandler
 {
     protected override bool Handle(PlayerJoinPacket packet, IPEndPoint? clientEp)
     {
+        if (!RequireAuthenticatedPlayer(clientEp, packet.PlayerId))
+            return false;
+
         if (PlayerManager.GetPlayer(packet.PlayerId) != null)
         {
             SrLogger.LogWarning($"Player {packet.PlayerId} already exists");

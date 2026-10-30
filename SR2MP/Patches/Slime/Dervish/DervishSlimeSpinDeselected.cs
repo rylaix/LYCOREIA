@@ -2,6 +2,7 @@
 using Il2CppMonomiPark.SlimeRancher.Slime.Dervish;
 using SR2MP.Components.Actor;
 using SR2MP.Packets.Slime.Dervish;
+using SR2MP.Shared.Managers;
 
 namespace SR2MP.Patches.Slime.Dervish;
 
@@ -13,6 +14,7 @@ internal static class DervishSlimeSpinDeselected
         if (!Main.Server.IsRunning && !Main.Client.IsConnected) return true;
         
         var networkActor = __instance.GetComponent<NetworkActor>();
+        if (!networkActor) return true;
         if (!networkActor.LocallyOwned && !HandlingPacket) return false;
 
         return true;
@@ -24,6 +26,7 @@ internal static class DervishSlimeSpinDeselected
         if (HandlingPacket) return;
 
         var networkActor = __instance.GetComponent<NetworkActor>();
+        if (!networkActor) return;
         if (!networkActor.LocallyOwned) return;
 
         var packet = new DervishCyclonePacket
@@ -32,6 +35,6 @@ internal static class DervishSlimeSpinDeselected
             Active = false
         };
 
-        Main.SendToAllOrServer(packet);
+        NetworkSlimeBehaviorManager.Publish(packet);
     }
 }

@@ -25,7 +25,7 @@ internal sealed class InitialPuzzleSlotsPacket : IPacket
     public List<Slot> Slots;
 
     public PacketType Type => PacketType.InitialPuzzleSlots;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer) => writer.WriteList(Slots, PacketWriterDels.NetObject<Slot>.Writer);

@@ -23,18 +23,23 @@ internal sealed class GadgetTeleporterActivateHandler : BasePacketHandler<Gadget
         var fx = packet.IsArrival ? node._arriveFX : node._departFX;
         var sfx = packet.IsArrival ? node._arriveSfx : node._departSfx;
 
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
-
-        if (fx)
+        try
         {
-            try { FXHelpers.SpawnAndPlayFX(fx, node.transform.position, node.transform.rotation); }
-            catch { /* ignored */ }
+            if (fx)
+            {
+                try { FXHelpers.SpawnAndPlayFX(fx, node.transform.position, node.transform.rotation); }
+                catch { /* ignored */ }
+            }
+
+            if (sfx)
+                RemoteFXManager.PlayTransientAudio(sfx, node.transform.position, 1f);
         }
-
-        if (sfx)
-            RemoteFXManager.PlayTransientAudio(sfx, node.transform.position, 1f);
-
-        HandlingPacket = false;
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
 
         return true;
     }

@@ -2,6 +2,7 @@ using System.Collections;
 using Il2CppMonomiPark.SlimeRancher.DataModel;
 using SR2MP.Components.Actor;
 using SR2MP.Packets.Actor;
+using SR2MP.Shared.Utils;
 
 namespace SR2MP.Shared.Managers;
 
@@ -9,6 +10,24 @@ internal sealed partial class NetworkActorManager
 {
     public readonly Dictionary<long, IdentifiableModel> Actors = new();
     public readonly Dictionary<int, IdentifiableType> ActorTypes = new();
+    internal readonly Dictionary<long, string> OwnershipByActorId = new();
+    // Per-actor ownership epoch (see OwnershipEpochPolicy). The host is the only issuer; clients mirror
+    // the value from ownership packets and the join snapshot. Absent = 0.
+    internal readonly Dictionary<long, uint> EpochByActorId = new();
+
+    internal uint GetEpoch(long actorId) => EpochByActorId.GetValueOrDefault(actorId);
+    internal void SetEpoch(long actorId, uint epoch) => EpochByActorId[actorId] = epoch;
+    internal bool HasAuthoritativeOwnershipSnapshot { get; private set; }
+
+    internal bool CanPublishLocalActorSpawn(long actorId)
+    {
+        if (Main.Server.IsRunning)
+            return ActorSpawnPublicationPolicy.IsHostActorId(actorId);
+
+        return Main.Client.IsConnected &&
+               ActorSpawnPublicationPolicy.CanClientPublish(
+                   actorId, LocalID, HasAuthoritativeOwnershipSnapshot);
+    }
 
     public static int GetPersistentID(IdentifiableType type)
         => GameContext.Instance.AutoSaveDirector._saveReferenceTranslation.GetPersistenceId(type);
@@ -17,6 +36,10 @@ internal sealed partial class NetworkActorManager
     {
         ActorTypes.Clear();
         Actors.Clear();
+        OwnershipByActorId.Clear();
+        EpochByActorId.Clear();
+        OwnershipArbiter.Reset();
+        HasAuthoritativeOwnershipSnapshot = false;
 
         foreach (var type in context.AutoSaveDirector._saveReferenceTranslation._identifiableTypeLookup)
             ActorTypes.TryAdd(GetPersistentID(type.value), type.value);
@@ -25,6 +48,20 @@ internal sealed partial class NetworkActorManager
 
         StartCoroutine(ZoneLoadingLoop());
         StartCoroutine(OwnUnownedSlimesLoop());
+        StartCoroutine(OwnershipArbiterLoop());
+    }
+
+    private IEnumerator OwnershipArbiterLoop()
+    {
+        while (true)
+        {
+            yield return new WaitForSeconds(OwnershipArbiter.TickSeconds);
+
+            if (!Main.Server.IsRunning)
+                continue;
+
+            OwnershipArbiter.Tick(UnityEngine.Time.unscaledTime);
+        }
     }
 
     private IEnumerator OwnUnownedSlimesLoop()
@@ -42,7 +79,7 @@ internal sealed partial class NetworkActorManager
             if (SceneContext.Instance?.player == null)
                 continue;
 
-            TakeOwnershipOfNearby(true);
+            TakeOwnershipOfUnownedNearby();
         }
     }
 
@@ -64,6 +101,7 @@ internal sealed partial class NetworkActorManager
                 continue;
 
             var scene = SystemContext.Instance.SceneLoader.CurrentSceneGroup;
+            var ownershipByActorId = new Dictionary<long, (string OwnerId, bool LocallyOwned)>();
 
             foreach (var actor in gameModel!.identifiables)
             {
@@ -76,6 +114,22 @@ internal sealed partial class NetworkActorManager
                 var obj = actor.value.GetGameObject();
                 if (!obj)
                     continue;
+
+                var networkActor = obj.GetComponent<NetworkActor>();
+                if (networkActor)
+                {
+                    var ownerId = networkActor.CurrentOwnerId;
+                    var locallyOwned = networkActor.LocallyOwned;
+                    if (OwnershipByActorId.TryGetValue(actor.value.actorId.Value, out var snapshotOwner))
+                    {
+                        ownerId = snapshotOwner;
+                        locallyOwned = snapshotOwner == LocalID;
+                    }
+
+                    ownershipByActorId[actor.value.actorId.Value] =
+                        (ownerId, locallyOwned);
+                    networkActor.SuppressDestroyPacket = true;
+                }
 
                 Object.Destroy(obj);
                 Actors.Remove(actor.value.actorId.Value);
@@ -97,24 +151,33 @@ internal sealed partial class NetworkActorManager
                 if (actor2.value.sceneGroup != scene)
                     continue;
 
-                HandlingPacket = true;
-                var obj = InstantiationHelpers.InstantiateActorFromModel(model);
-                HandlingPacket = false;
+                var obj = InstantiateActorWithoutNetworkSync(model);
 
                 if (!obj)
                     continue;
 
                 var networkComponent = obj.AddComponent<NetworkActor>();
 
+                if (ownershipByActorId.TryGetValue(model.actorId.Value, out var ownership))
+                {
+                    networkComponent.CurrentOwnerId = ownership.OwnerId;
+                    networkComponent.LocallyOwned = ownership.LocallyOwned;
+                }
+                else if (OwnershipByActorId.TryGetValue(model.actorId.Value, out var snapshotOwner))
+                {
+                    networkComponent.CurrentOwnerId = snapshotOwner;
+                    networkComponent.LocallyOwned = snapshotOwner == LocalID;
+                }
+
                 networkComponent.previousPosition = model.lastPosition;
                 networkComponent.nextPosition     = model.lastPosition;
                 networkComponent.previousRotation = model.lastRotation;
                 networkComponent.nextRotation     = model.lastRotation;
 
-                Actors.Add(model.actorId.Value, model);
+                Actors[model.actorId.Value] = model;
             }
 
-            TakeOwnershipOfNearby();
+            TakeOwnershipOfUnownedNearby();
         }
     }
 
@@ -136,16 +199,39 @@ internal sealed partial class NetworkActorManager
         return result;
     }
     
-    internal void TakeOwnershipOfNearby(bool onlyUnownedSlimes = false)
-    {
-        var boundsSize = new Vector3(600, 1250, 600);
-        var ownershipBoundsSize = new Vector3(200, 1250, 200);
-        var bounds = new Bounds(SceneContext.Instance.player.transform.position, boundsSize);
+    // Proximity interest: actors nobody is simulating (no owner / owner gone / owner released) inside the loaded
+    // bounds, plus actors owned by someone else that are close enough to contest. Both host and client only express
+    // interest here; the host arbiter decides.
+    private const float ContestRadius = 60f;
+    private const int MaxInterestPerPass = 128;
+    private int interestCursor;
 
-        foreach (var actor in Actors.Values.ToArray())
+    internal void TakeOwnershipOfUnownedNearby()
+    {
+        if (Main.Client.IsConnected && !HasAuthoritativeOwnershipSnapshot)
+            return;
+
+        var player = SceneContext.Instance?.player;
+        if (player == null)
+            return;
+
+        var boundsSize = new Vector3(600, 1250, 600);
+        var bounds = new Bounds(player.transform.position, boundsSize);
+        var sent = 0;
+        var all = Actors.Values.ToArray();
+        if (all.Length == 0)
+            return;
+        // Rotate the start so a cap of contested actors can never starve free actors further down the table.
+        interestCursor = (interestCursor + MaxInterestPerPass) % all.Length;
+
+        for (var step = 0; step < all.Length; step++)
         {
+            var actor = all[(interestCursor + step) % all.Length];
             try
             {
+                if (sent >= MaxInterestPerPass)
+                    break;
+
                 if (actor == null)
                     continue;
 
@@ -155,41 +241,50 @@ internal sealed partial class NetworkActorManager
                 if (!actor.TryGetNetworkComponent(out var netActor))
                     continue;
 
-                if (onlyUnownedSlimes)
-                {
-                    if (netActor.LocallyOwned)
-                        continue;
-
-                    if (netActor.RegionMember?._hibernating == true)
-                        continue;
-
-                    var ownerId = netActor.CurrentOwnerId;
-                    var ownerExists = !string.IsNullOrEmpty(ownerId) && PlayerManager.CheckPlayerExists(ownerId);
-
-                    if (netActor.isPlort && !ownerExists)
-                    {
-                        try { Destroyer.DestroyAny(actor.GetGameObject(), "SR2MP.UnownedSlimeOwnership"); } catch { /* ignored */ }
-                        continue;
-                    }
-
-                    if (ownerExists
-                        && netActor.OwnerRecentlyHeard
-                        && PlayerObjects.TryGetValue(ownerId, out var playerObj)
-                        && playerObj
-                        && new Bounds(playerObj.transform.position, ownershipBoundsSize).Contains(actor.lastPosition))
-                        continue;
-                }
-
                 var actorId = netActor.ActorId;
                 if (actorId.Value == 0)
                     continue;
 
-                var packet = new ActorTransferPacket { ActorId = actorId, OwnerId = LocalID };
-                ApplyOwnership(packet);
-                Main.SendToAllOrServer(packet);
+                if (netActor.LocallyOwned || netActor.RegionMember?._hibernating == true)
+                    continue;
+
+                var ownerId = netActor.CurrentOwnerId;
+                var free = string.IsNullOrEmpty(ownerId) || !PlayerManager.CheckPlayerExists(ownerId) ||
+                           WasReleasedByOwner(actorId.Value, ownerId);
+                if (!free)
+                {
+                    // Contest only when clearly closer than the owner (the host applies the same 25 % rule), so
+                    // hopeless interest is never sent.
+                    var myDistance = Vector3.Distance(player.transform.position, actor.lastPosition);
+                    var ownerPlayer = PlayerManager.GetPlayer(ownerId);
+                    if (myDistance > ContestRadius || ownerPlayer == null ||
+                        myDistance > 0.75f * Vector3.Distance(ownerPlayer.Position, actor.lastPosition))
+                        continue;
+                }
+
+#if SR2MP_DEEPLOG || SR2MP_TEST
+                ActorDiag.Log("ownership-interest", actorId.Value,
+                    $"reason={(free ? "owner-free" : "contest")}; owner={ownerId}; interested={LocalID}",
+                    perActorMilliseconds: 2000);
+#endif
+                sent++;
+                ExpressOwnershipInterest(actorId, ownerId);
             }
             catch { /* ignored */ }
         }
+    }
+
+    internal void ReplaceOwnershipSnapshot(
+        Dictionary<long, SR2MP.Packets.Loading.InitialActorsPacket.OwnershipEntry> ownership, bool isAuthoritative)
+    {
+        OwnershipByActorId.Clear();
+        EpochByActorId.Clear();
+        foreach (var (actorId, entry) in ownership)
+        {
+            OwnershipByActorId[actorId] = entry.OwnerId ?? string.Empty;
+            EpochByActorId[actorId] = entry.Epoch;
+        }
+        HasAuthoritativeOwnershipSnapshot = isAuthoritative;
     }
     
     internal void AssignOwnershipOfUnowned()
@@ -198,6 +293,7 @@ internal sealed partial class NetworkActorManager
             return;
 
         var bounds = new Vector3(600, 1250, 600);
+        var now = UnityEngine.Time.unscaledTime;
 
         var allPlayers = new List<(string PlayerId, Vector3 Position)>
         {
@@ -227,30 +323,22 @@ internal sealed partial class NetworkActorManager
                 if (actorId.Value == 0)
                     continue;
 
+                // Every in-range player counts as interested; the arbiter picks the nearest (host on ties).
                 var position = actor.lastPosition;
-                string? newOwner = null;
-                var bestDistance = float.MaxValue;
+                var registered = false;
 
                 foreach (var (playerId, playerPosition) in allPlayers)
                 {
                     if (!new Bounds(playerPosition, bounds).Contains(position))
                         continue;
 
-                    var distance = (playerPosition - position).sqrMagnitude;
-
-                    if (distance >= bestDistance)
-                        continue;
-
-                    bestDistance = distance;
-                    newOwner = playerId;
+                    OwnershipArbiter.RegisterInterest(playerId, actorId.Value,
+                        Vector3.Distance(playerPosition, position), now);
+                    registered = true;
                 }
 
-                if (newOwner == null)
-                    continue;
-
-                var packet = new ActorTransferPacket { ActorId = actorId, OwnerId = newOwner };
-                ApplyOwnership(packet);
-                Main.SendToAllOrServer(packet);
+                if (registered)
+                    OwnershipArbiter.EvaluateNow(actorId.Value);
             }
             catch { /* ignored */ }
         }

@@ -14,7 +14,7 @@ internal sealed class InitialDroneResourcesPacket : IPacket
     public List<SceneEntries> Scenes = new();
 
     public PacketType Type => PacketType.InitialDroneResources;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

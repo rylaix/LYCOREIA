@@ -4,9 +4,11 @@ using Unity.Mathematics;
 
 namespace SR2MP.Packets.Actor;
 
-internal struct ActorSpawnPacket : IPacket
+internal struct ActorSpawnPacket : IActorWorldRevisionPacket
 {
     public string OwnerId;
+    public long WorldRevision { get; set; }
+    public bool HasWorldRevision { get; set; }
     
     public ActorId ActorId;
     public Quaternion Rotation;
@@ -28,7 +30,7 @@ internal struct ActorSpawnPacket : IPacket
     public byte SpawnType;
 
     public readonly PacketType Type => PacketType.ActorSpawn;
-    public readonly PacketReliability Reliability => PacketReliability.Reliable;
+    public readonly PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public readonly NetworkChannel Channel => NetworkChannel.ActorCritical;
 
     public readonly void Serialise(PacketWriter writer)
@@ -60,6 +62,8 @@ internal struct ActorSpawnPacket : IPacket
         }
 
         writer.WriteStringWithoutSize(OwnerId);
+        if (HasWorldRevision)
+            writer.WriteLong(WorldRevision);
     }
 
     public void Deserialise(PacketReader reader)
@@ -91,5 +95,10 @@ internal struct ActorSpawnPacket : IPacket
         }
 
         OwnerId = reader.ReadPooledStringOfSize(16)!;
+        if (reader.BytesRemaining >= sizeof(long))
+        {
+            WorldRevision = reader.ReadLong();
+            HasWorldRevision = true;
+        }
     }
 }

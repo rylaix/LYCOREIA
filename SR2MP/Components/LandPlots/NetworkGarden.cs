@@ -36,7 +36,7 @@ internal sealed class NetworkGarden : MonoBehaviour
             if (!string.IsNullOrEmpty(resolvedId))
                 return resolvedId;
 
-            var landPlot = GetComponentInParent<LandPlotLocation>();
+            var landPlot = GetComponentInParent<LandPlotLocation>(true);
             if (landPlot != null && !string.IsNullOrEmpty(landPlot._id) && garden != null)
             {
                 var siblings = landPlot.GetComponentsInChildren<SpawnResource>(true);
@@ -59,8 +59,12 @@ internal sealed class NetworkGarden : MonoBehaviour
         }
     }
 
+    internal string? LandPlotId
+        => GetComponentInParent<LandPlotLocation>(true)?._id;
+
     public bool IsHibernated { get; private set; }
     private string CurrentOwnerId { get; set; } = string.Empty;
+    internal string OwnerId => CurrentOwnerId;
 
     public bool LocallyOwned
     {
@@ -156,6 +160,7 @@ internal sealed class NetworkGarden : MonoBehaviour
         CurrentOwnerId = LocalID;
         LocallyOwned = true;
         lastActivityTime = UnityEngine.Time.time;
+        NetworkGardenManager.RecordOwner(Id, CurrentOwnerId);
 
         SrLogger.LogGarden($"Garden '{Id}' claimed by '{LocalID}' (broadcast={broadcast}, nextSpawnTime={garden?._model?.nextSpawnTime})");
 
@@ -252,11 +257,11 @@ internal sealed class NetworkGarden : MonoBehaviour
             if (!LocallyOwned)
                 return;
 
-            NetworkGardenManager.QueueFinalState(this);
+            var finalState = CaptureState();
             LocallyOwned = false;
 
             // So others can take over immediately without having to wait the delay
-            NetworkGardenManager.BroadcastRelease(Id!);
+            NetworkGardenManager.BroadcastRelease(Id!, finalState);
             SrLogger.LogGarden($"Garden '{Id}' released on hibernation");
             // CurrentOwnerId stays ours, if nobody claims it while we're away,
             // we resume simulation once its loaded again.
@@ -266,10 +271,13 @@ internal sealed class NetworkGarden : MonoBehaviour
             RestoreCachedState();
             lastActivityTime = UnityEngine.Time.time;
 
-            if (CurrentOwnerId == LocalID)
+            if (NetworkGardenManager.ShouldReclaimOwnershipOnWake(CurrentOwnerId, LocalID))
             {
-                LocallyOwned = true;
-                SrLogger.LogGarden($"Garden '{Id}' ownership resumed on wake");
+                // The hibernation release clears the manager's owner record. Reclaim
+                // through the normal path so snapshots and peers agree with the resumed
+                // local simulation owner.
+                TakeOwnership();
+                SrLogger.LogGarden($"Garden '{Id}' ownership reclaimed on wake");
             }
         }
     }
@@ -280,6 +288,13 @@ internal sealed class NetworkGarden : MonoBehaviour
 
         if (LocallyOwned)
             return;
+
+        ApplyAuthoritativeUpdate(nextSpawnTime, storedWater, nextSpawnRipens);
+    }
+
+    internal void ApplyAuthoritativeUpdate(double nextSpawnTime, float storedWater, bool nextSpawnRipens)
+    {
+        lastActivityTime = UnityEngine.Time.time;
 
         CacheState(nextSpawnTime, storedWater, nextSpawnRipens);
 

@@ -3,20 +3,25 @@
 
 internal static class BuildInfo
 {
-    internal const string ID = "de.pyeight.ranchingtogether";
-    internal const string Name = "Ranching Together";
-    internal const string Description = "Adds Multiplayer to Slime Rancher 2";
-    internal const string Author = "Shark (py8)";
+    internal const string ID = "com.rylaix.lycoreia";
+    internal const string Name = "Lycoreia";
+    internal const string Description = "Host-authoritative multiplayer co-op for Slime Rancher 2";
+    internal const string Author = "Rylaix (core developer, github.com/rylaix)";
     internal static readonly string[] CoAuthors = null;
-    internal static readonly string[] Contributors = new[] { "AlchlcSystm, PinkTarr" };
+    // Upstream (Ranching Together) authors are credited in NOTICE.md and AssemblyCopyright
+    internal static readonly string[] Contributors = new[] { "Kum1te (core QA, github.com/kum1te)" };
     // MelonVersion is shown by ML on startup
     // Version is shown by Starlight
-    // Version automatically gets a -dev at the end if SR2MP is compiled by GitHub Action
-    internal const string MelonVersion = "0.3.9";
-    internal const string Version = "0.3.9"; // Auto-Dev_Do_not_remove
-    internal const string Discord = "https://discord.com/invite/a7wfBw5feU";
-    internal const string SourceCode = "https://github.com/pyeight/SlimeRancher2Multiplayer";
-    internal const string Nexus = "https://www.nexusmods.com/slimerancher2/mods/118";
+    // Release builds are stamped by tools/set-version.sh (GitHub Action "Build release")
+    internal const string MelonVersion = "1.0.0";
+    internal const string Version = "1.0.0-rc.16"; // Auto-Dev_Do_not_remove
+    internal const string Discord = "https://discord.gg/nGyPFTdnCH";
+    internal const string SourceCode = "https://github.com/rylaix/Lycoreia";
+    internal const string Nexus = "https://github.com/rylaix/Lycoreia/releases";
+    internal const string Releases = "https://github.com/rylaix/Lycoreia/releases";
+    internal const string LatestVersionUrl = "https://raw.githubusercontent.com/rylaix/Lycoreia/refs/heads/main/latestModVersion.txt";
+    internal const string DiscordAppID = "1565692817748140102";
+    internal const string OriginalProject = "https://github.com/pyeight/SlimeRancher2Multiplayer";
     internal const bool UsePrism = false;
     internal const string MinimumStarlightVersion = Starlight.BuildInfo.CodeVersion; // e.g "3.6.3", the min required SR2 version. No beta or alpha versions
     internal const string MinimumGameVersion = "1.3.0"; // e.g 1.1.0 or something similar (optional)

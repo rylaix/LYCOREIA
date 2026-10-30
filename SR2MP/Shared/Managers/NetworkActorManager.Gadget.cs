@@ -18,13 +18,21 @@ internal sealed partial class NetworkActorManager
         }
         
         if (!FreeActorIdForGadget(actorId, type))
+        {
+            SrLogger.LogWarning($"Gadget {actorId.Value:X} not (re)created: id already in use by same type or a player (type={type.name})");
+            Logger.LogDiagnostic("gadget", "free-id-refused", $"actorId={actorId.Value:X}; type={type.name}");
             return false;
+        }
 
         var scene = NetworkSceneManager.GetSceneGroup(sceneId);
 
         var model = NetworkGadgetManager.CreateNetworkGadget(type, actorId, scene, position, rotation, out _);
         if (model == null)
+        {
+            SrLogger.LogWarning($"Gadget {actorId.Value:X} create failed (type={type.name})");
+            Logger.LogDiagnostic("gadget", "create-failed", $"actorId={actorId.Value:X}; type={type.name}");
             return false;
+        }
 
         if (chargeupTime > 0)
         {
@@ -57,7 +65,11 @@ internal sealed partial class NetworkActorManager
         }
 
         if (!FreeActorIdForGadget(actorId, type))
+        {
+            SrLogger.LogWarning($"Gadget {actorId.Value:X} not (re)created: id already in use by same type or a player (type={type.name})");
+            Logger.LogDiagnostic("gadget", "free-id-refused", $"actorId={actorId.Value:X}; type={type.name}");
             return false;
+        }
         
         switch (actorData)
         {
@@ -77,7 +89,11 @@ internal sealed partial class NetworkActorManager
 
         var model = NetworkGadgetManager.CreateNetworkGadget(type, actorId, scene, position, rotation, out _);
         if (model == null)
+        {
+            SrLogger.LogWarning($"Gadget {actorId.Value:X} create failed (type={type.name})");
+            Logger.LogDiagnostic("gadget", "create-failed", $"actorId={actorId.Value:X}; type={type.name}");
             return false;
+        }
 
         identifiableModel = model.TryCast<IdentifiableModel>();
 
@@ -113,7 +129,11 @@ internal sealed partial class NetworkActorManager
 
         var model = NetworkGadgetManager.CreateNetworkGadget(type, actorId, scene, position, rotation, out _);
         if (model == null)
+        {
+            SrLogger.LogWarning($"Gadget {actorId.Value:X} create failed (type={type.name})");
+            Logger.LogDiagnostic("gadget", "create-failed", $"actorId={actorId.Value:X}; type={type.name}");
             return false;
+        }
 
         identifiableModel = model.Cast<IdentifiableModel>();
 

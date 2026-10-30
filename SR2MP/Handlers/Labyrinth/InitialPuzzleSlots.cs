@@ -11,12 +11,17 @@ internal sealed class InitialPuzzleSlotsHandler : BasePacketHandler<InitialPuzzl
 {
     protected override bool Handle(InitialPuzzleSlotsPacket packet, IPEndPoint? _)
     {
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
-
-        foreach (var slot in packet.Slots)
-            NetworkPuzzleSlotManager.ApplyState(slot.ID, slot.Filled);
-
-        HandlingPacket = false;
+        try
+        {
+            foreach (var slot in packet.Slots)
+                NetworkPuzzleSlotManager.ApplyState(slot.ID, slot.Filled);
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
 
         return false;
     }

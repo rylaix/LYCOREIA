@@ -55,7 +55,9 @@ internal sealed class ReliabilityManager
     private readonly ConcurrentDictionary<PacketKey, PendingPacket> pendingPackets = new();
     private readonly ConcurrentDictionary<ChannelKey, ushort> lastProcessedSequence = new();
     private readonly ConcurrentDictionary<ChannelKey, int> sequenceNumbersByChannel = new();
-    private readonly ConcurrentDictionary<ChannelKey, SortedDictionary<ushort, Action>> reorderBuffers = new();
+    private readonly ConcurrentDictionary<ChannelKey, SortedDictionary<ushort, BufferedPacket>> reorderBuffers = new();
+
+    private readonly record struct BufferedPacket(Action Action, DateTime ReceivedAt);
     private readonly ConcurrentDictionary<ChannelKey, object> reorderLocks = new();
     private readonly ConcurrentQueue<PendingPacket> pendingDisposal = new();
 
@@ -66,8 +68,22 @@ internal sealed class ReliabilityManager
 
     private static readonly TimeSpan ResendInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan MaxRetryTime = TimeSpan.FromSeconds(10);
+    // Large split packets (join snapshots: 250-400 chunks) get as long as the receiver keeps partial
+    // chunks (PacketChunkManager.PacketTimeout), and their resends are paced and rotated: blasting all
+    // chunks in order made the tail of every burst overflow the path/receiver, so the same last chunks
+    // were lost on every attempt and the guest never got its InitialActors snapshot.
+    private static readonly TimeSpan MaxSplitRetryTime = TimeSpan.FromSeconds(30);
+    private const int LargeSplitChunkThreshold = 32;
+    private const int PacedChunksPerBurst = 24;
+    private const int PacedBurstGapMilliseconds = 5;
     private const int MaxResendAttempts = 64;
-    private const int MaxReorderBufferSize = 64;
+    // Every packet that reaches the reorder logic has already been ACKed, so it must never be dropped: a dropped
+    // ACKed packet is lost for good (its resend is discarded as a duplicate). Past this size packets are delivered
+    // immediately and a placeholder keeps the sequence moving.
+    private const int MaxReorderBufferSize = 4096;
+    // The sender gives up after MaxRetryTime; a gap older than that will never fill, so skip it.
+    private static readonly TimeSpan ReorderGapTimeout = TimeSpan.FromSeconds(12);
+    private static readonly Action DeliveredPlaceholder = static () => { };
 
     public ReliabilityManager(Action<ArraySegment<byte>, IPEndPoint> sendRawCallback)
     {
@@ -161,14 +177,16 @@ internal sealed class ReliabilityManager
 
         lock (lockObj)
         {
+            // Senders number every stream from 1. Adopting the first *arrival* as the baseline silently dropped
+            // every earlier packet that arrived late (already ACKed, so never resent). Peer state is reset on
+            // (re)connect, so a missing entry always means "nothing processed yet".
             if (!lastProcessedSequence.TryGetValue(key, out var lastSequence))
-            {
-                // First packet from this sender on this channel/type
-                lastProcessedSequence[key] = sequenceNumber;
-                return true;
-            }
+                lastSequence = 0;
 
-            if (IsSequenceNewer(sequenceNumber, lastSequence) || sequenceNumber == (ushort)(lastSequence + 1))
+            SkipTimedOutGap(key, lockObj);
+            lastSequence = lastProcessedSequence.TryGetValue(key, out var afterSkip) ? afterSkip : lastSequence;
+
+            if (IsSequenceNewer(sequenceNumber, lastSequence) || sequenceNumber == NextSequence(lastSequence))
             {
                 if (reliability == PacketReliability.Ordered)
                 {
@@ -176,7 +194,7 @@ internal sealed class ReliabilityManager
                     return true;
                 }
 
-                var expectedSequence = (ushort)(lastSequence + 1);
+                var expectedSequence = NextSequence(lastSequence);
 
                 if (sequenceNumber == expectedSequence)
                 {
@@ -187,11 +205,14 @@ internal sealed class ReliabilityManager
 
                 if (processAction != null)
                 {
-                    var buffer = reorderBuffers.GetOrAdd(key, _ => new SortedDictionary<ushort, Action>());
+                    var buffer = reorderBuffers.GetOrAdd(key, _ => new SortedDictionary<ushort, BufferedPacket>());
+
+                    if (buffer.ContainsKey(sequenceNumber))
+                        return false;
 
                     if (buffer.Count < MaxReorderBufferSize)
                     {
-                        buffer[sequenceNumber] = processAction;
+                        buffer[sequenceNumber] = new BufferedPacket(processAction, DateTime.UtcNow);
                         SrLogger.LogPacketSize(
                             $"Buffered out-of-order packet: " +
                             $"expected seq={expectedSequence}, got seq={sequenceNumber}, " +
@@ -199,9 +220,11 @@ internal sealed class ReliabilityManager
                     }
                     else
                     {
-                        SrLogger.LogPacketSize(
-                            $"Reorder buffer full, dropping packet: " +
+                        buffer[sequenceNumber] = new BufferedPacket(DeliveredPlaceholder, DateTime.UtcNow);
+                        SrLogger.LogWarning(
+                            $"Reorder buffer full; delivering out of order: " +
                             $"seq={sequenceNumber}, type={packetType}, channel={channel}");
+                        return true;
                     }
                 }
                 else
@@ -225,8 +248,8 @@ internal sealed class ReliabilityManager
 
         while (buffer.Count > 0)
         {
-            var next = (ushort)(lastProcessedSequence[key] + 1);
-            if (!buffer.TryGetValue(next, out var bufferedAction))
+            var next = NextSequence(lastProcessedSequence.TryGetValue(key, out var last) ? last : (ushort)0);
+            if (!buffer.TryGetValue(next, out var buffered))
                 break;
 
             buffer.Remove(next);
@@ -235,12 +258,28 @@ internal sealed class ReliabilityManager
             Monitor.Exit(lockObj);
             try
             {
-                bufferedAction();
+                buffered.Action();
             }
             finally
             {
                 Monitor.Enter(lockObj);
             }
+        }
+    }
+
+    /// <summary>
+    /// Resends a large split packet starting at a different chunk each attempt (so chunks lost at the
+    /// end of one burst lead the next), with short gaps between bursts. Runs on the resend thread.
+    /// </summary>
+    private void ResendPaced(PendingPacket packet)
+    {
+        var count = packet.SplitData.Count;
+        var start = (int)((packet.SendCount * 7919L) % count);
+        for (var sent = 0; sent < count; sent++)
+        {
+            sendRawCallback(packet.SplitData.Chunks[(start + sent) % count], packet.Destination);
+            if ((sent + 1) % PacedChunksPerBurst == 0 && sent + 1 < count)
+                Thread.Sleep(PacedBurstGapMilliseconds);
         }
     }
 
@@ -267,7 +306,9 @@ internal sealed class ReliabilityManager
                     if (packet.IsRecycled)
                         continue;
                     
-                    if (now - packet.FirstSendTime > MaxRetryTime || packet.SendCount >= MaxResendAttempts)
+                    var largeSplit = packet.SplitData.Count > LargeSplitChunkThreshold;
+                    if (now - packet.FirstSendTime > (largeSplit ? MaxSplitRetryTime : MaxRetryTime) ||
+                        packet.SendCount >= MaxResendAttempts)
                     {
                         SrLogger.LogPacketAcknowledge(
                             $"Packet {packet.PacketId} (type={packet.PacketType}) " +
@@ -279,8 +320,11 @@ internal sealed class ReliabilityManager
                     // Checks if packet should be resent
                     if (now - packet.LastSendTime > ResendInterval)
                     {
-                        for (var i = 0; i < packet.SplitData.Count; i++)
-                            sendRawCallback(packet.SplitData.Chunks[i], packet.Destination);
+                        if (largeSplit)
+                            ResendPaced(packet);
+                        else
+                            for (var i = 0; i < packet.SplitData.Count; i++)
+                                sendRawCallback(packet.SplitData.Chunks[i], packet.Destination);
 
                         packet.LastSendTime = now;
                         packet.SendCount++;
@@ -318,6 +362,53 @@ internal sealed class ReliabilityManager
     {
         while (pendingDisposal.TryDequeue(out var packet))
             PendingPacket.Return(packet);
+    }
+
+    // Matches GetNextSequenceNumber: sequences wrap from ushort.MaxValue back to 1 (0 is never sent).
+    private static ushort NextSequence(ushort sequence) => sequence >= ushort.MaxValue ? (ushort)1 : (ushort)(sequence + 1);
+
+    private static ushort PreviousSequence(ushort sequence) => sequence <= 1 ? ushort.MaxValue : (ushort)(sequence - 1);
+
+    private void SkipTimedOutGap(ChannelKey key, object lockObj)
+    {
+        if (!reorderBuffers.TryGetValue(key, out var buffer) || buffer.Count == 0)
+            return;
+
+        var oldestSequence = (ushort)0;
+        var oldestAt = DateTime.MaxValue;
+        foreach (var (sequence, buffered) in buffer)
+        {
+            if (buffered.ReceivedAt >= oldestAt)
+                continue;
+            oldestAt = buffered.ReceivedAt;
+            oldestSequence = sequence;
+        }
+
+        if (DateTime.UtcNow - oldestAt < ReorderGapTimeout)
+            return;
+
+        SrLogger.LogWarning($"Ordered stream gap never filled; skipping to seq={oldestSequence}");
+        lastProcessedSequence[key] = PreviousSequence(oldestSequence);
+        DrainReorderBuffer(key, lockObj);
+    }
+
+    /// <summary>
+    /// Forgets all reliability state for one peer, so a reconnect from the same address starts fresh streams.
+    /// </summary>
+    public void ResetPeer(IPEndPoint peer)
+    {
+        foreach (var key in lastProcessedSequence.Keys)
+            if (key.Peer.Equals(peer))
+                lastProcessedSequence.TryRemove(key, out _);
+        foreach (var key in sequenceNumbersByChannel.Keys)
+            if (key.Peer.Equals(peer))
+                sequenceNumbersByChannel.TryRemove(key, out _);
+        foreach (var key in reorderBuffers.Keys)
+            if (key.Peer.Equals(peer))
+                reorderBuffers.TryRemove(key, out _);
+        foreach (var (key, packet) in pendingPackets)
+            if (key.EndPoint.Equals(peer) && pendingPackets.TryRemove(key, out _))
+                pendingDisposal.Enqueue(packet);
     }
 
     private static bool IsSequenceNewer(ushort s1, ushort s2)

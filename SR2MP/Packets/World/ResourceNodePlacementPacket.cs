@@ -54,7 +54,7 @@ internal sealed class ResourceNodePlacementPacket : IPacket
     public ResourceNodePlacement Node = new();
 
     public PacketType Type => PacketType.ResourceNodePlacement;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer) => Node.Serialise(writer);

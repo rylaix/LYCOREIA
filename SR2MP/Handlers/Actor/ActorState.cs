@@ -5,21 +5,25 @@ using SR2MP.Components.Actor;
 using SR2MP.Handlers.Internal;
 using SR2MP.Packets.Actor;
 using SR2MP.Packets.Utils;
+using SR2MP.Shared.Managers;
 
 namespace SR2MP.Handlers.Actor;
 
 [PacketHandler((byte)PacketType.ActorState)]
 internal sealed class ActorStateHandler : BasePacketHandler<ActorStatePacket>
 {
-    protected override bool Handle(ActorStatePacket packet, IPEndPoint? _)
+    protected override bool Handle(ActorStatePacket packet, IPEndPoint? clientEndpoint)
     {
+        if (!NetworkActorManager.IsCurrentActorOwner(packet.ActorId, clientEndpoint))
+            return false;
+
         if (!ActorManager.Actors.TryGetValue(packet.ActorId.Value, out var model))
-            return true;
+            return false;
 
         var actor = model.Cast<ActorModel>();
 
         if (!actor.TryGetNetworkComponent(out var networkComponent))
-            return true;
+            return false;
 
         var actorId = packet.ActorId;
 
@@ -29,9 +33,12 @@ internal sealed class ActorStateHandler : BasePacketHandler<ActorStatePacket>
         if (actorId.Value != 0 && GameState.identifiables.TryGetValue(actorId, out var identModel))
         {
             if (identModel == null)
+            {
                 SrLogger.LogWarning("IdentifiableModel is null in state handler!");
+                return false;
+            }
 
-            slime    = identModel!.TryCast<SlimeModel>();
+            slime    = identModel.TryCast<SlimeModel>();
             resource = identModel.TryCast<ProduceModel>();
         }
 
@@ -57,6 +64,17 @@ internal sealed class ActorStateHandler : BasePacketHandler<ActorStatePacket>
 
                 networkComponent.SetResourceState(packet.ResourceState, packet.ResourceProgress, true);
                 networkComponent.ApplyResourceScale(packet.ResourceScale);
+                break;
+            }
+
+            case ActorUpdateType.Plort:
+            {
+                var invulnerability = networkComponent.GetComponent<PlortInvulnerability>();
+                if (invulnerability)
+                {
+                    invulnerability.IsInvulnerable = packet.Invulnerable;
+                    invulnerability.InvulnerabilityPeriod = packet.InvulnerablePeriod;
+                }
                 break;
             }
         }

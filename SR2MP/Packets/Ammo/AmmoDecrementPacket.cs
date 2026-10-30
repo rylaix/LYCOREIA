@@ -9,7 +9,7 @@ internal sealed class AmmoDecrementPacket : IPacket
     public string? ID;
 
     public PacketType Type => PacketType.AmmoDecrement;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.Ammo;
 
     public void Serialise(PacketWriter writer)

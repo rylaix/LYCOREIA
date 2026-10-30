@@ -1,4 +1,5 @@
 ﻿using SR2MP.Packets.Actor;
+using SR2MP.Shared.Managers;
 
 namespace SR2MP.Components.Actor;
 
@@ -55,7 +56,11 @@ internal sealed partial class NetworkActor
         {
             var actorId = ActorId;
             if (actorId.Value != 0)
+            {
                 ActorManager.Actors.Remove(actorId.Value);
+                ActorManager.OwnershipByActorId.Remove(actorId.Value);
+                ActorManager.EpochByActorId.Remove(actorId.Value);
+            }
 
             IsDestroyed = true;
             Destroyer.DestroyAny(gameObject, "SR2MP.RottenCleanup");
@@ -97,7 +102,7 @@ internal sealed partial class NetworkActor
                 var actorId = ActorId;
 
                 if (actorId.Value != 0)
-                    Main.SendToAllOrServer(new ActorTransferPacket { ActorId = actorId, OwnerId = LocalID });
+                    NetworkActorManager.ExpressOwnershipInterest(actorId, CurrentOwnerId);
             }
         }
 

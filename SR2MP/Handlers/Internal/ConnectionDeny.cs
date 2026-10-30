@@ -10,7 +10,7 @@ internal sealed class ConnectionDenyHandler : BasePacketHandler<ConnectionDenyPa
 {
     protected override bool Handle(ConnectionDenyPacket packet, IPEndPoint? _)
     {
-        Main.Client.UpdateConnectionStatus(false);
+        Main.Client.RejectConnection();
         MultiplayerUI.Instance.RegisterSystemMessage("Connection was denied!",
             $"SYSTEM_CONNECTION_DENY_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}", MultiplayerUI.SystemMessageClose);
         return false;

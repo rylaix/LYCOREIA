@@ -25,6 +25,12 @@ internal partial class NetworkPlayer : MonoBehaviour
 
     // private MeshRenderer[] renderers;
     private Collider collider;
+    private Renderer[] remoteRenderers = Array.Empty<Renderer>();
+    private bool[] remoteRendererDefaults = Array.Empty<bool>();
+    private int[] remoteRendererLayers = Array.Empty<int>();
+    private int remoteRendererCameraMask;
+    private bool remoteRendererCameraMaskKnown;
+    private bool remoteBodyVisible;
 
     public int previousScene;
     
@@ -51,6 +57,25 @@ internal partial class NetworkPlayer : MonoBehaviour
     public string ID { get; internal set; }
 
     public bool IsLocal { get; internal set; }
+
+    internal bool RemoteMoving => model?.Moving == true;
+    internal bool RemoteSprinting => model?.Sprinting == true;
+
+    internal void BindLocalIdentity(string playerId)
+    {
+        ID = playerId;
+        IsLocal = true;
+        model = null;
+        previousPosition = nextPosition = transform.position;
+        previousRotation = nextRotation = new Vector2(transform.eulerAngles.y, 0f);
+        transformTimer = PlayerTimer;
+
+        var controller = GetComponent<SRCharacterController>();
+        if (controller && controller._cameraController != null)
+            camera = controller._cameraController.transform;
+
+        SetRemoteBodyVisible(true);
+    }
 
     private static TMP_FontAsset GetFont(string fontName) =>
         Resources.FindObjectsOfTypeAll<TMP_FontAsset>().FirstOrDefault(x => x.name == fontName)!;
@@ -118,6 +143,8 @@ internal partial class NetworkPlayer : MonoBehaviour
 
     public void OnDestroy()
     {
+        PlayerManager.OnPlayerGadgetUpdated -= OnGadgetUpdate;
+
         // if (IsLocal)
         // {
         //     var modelRenderers = GetComponentsInChildren<MeshRenderer>();
@@ -149,8 +176,71 @@ internal partial class NetworkPlayer : MonoBehaviour
         }
     }
 
-    private void SetupRenderersAndCollision() =>
+    private void SetupRenderersAndCollision()
+    {
         collider = GetComponentInChildren<Collider>();
+        if (IsLocal)
+            return;
+
+        remoteRenderers = GetComponentsInChildren<Renderer>(true).ToArray();
+        remoteRendererDefaults = remoteRenderers.Select(renderer => renderer && renderer.enabled).ToArray();
+        remoteRendererLayers = remoteRenderers.Select(renderer => renderer ? renderer.gameObject.layer : -1).ToArray();
+        EnsureRemoteRendererLayersVisibleToGameplayCamera();
+        SetRemoteBodyVisible(false);
+    }
+
+    private void EnsureRemoteRendererLayersVisibleToGameplayCamera()
+    {
+        if (IsLocal || remoteRenderers.Length == 0)
+            return;
+
+        var gameplayCamera = Camera.main;
+        if (!gameplayCamera)
+            return;
+
+        var cameraMask = gameplayCamera.cullingMask;
+        if (remoteRendererCameraMaskKnown && remoteRendererCameraMask == cameraMask)
+            return;
+
+        remoteRendererCameraMask = cameraMask;
+        remoteRendererCameraMaskKnown = true;
+
+        var defaultLayer = LayerMask.NameToLayer("Default");
+        var adjustedRenderers = 0;
+        for (var index = 0; index < remoteRenderers.Length; index++)
+        {
+            var renderer = remoteRenderers[index];
+            if (!renderer || index >= remoteRendererLayers.Length)
+                continue;
+
+            var targetLayer = RemotePlayerRenderLayerPolicy.ResolveRendererLayer(
+                remoteRendererLayers[index], cameraMask, defaultLayer);
+            if (targetLayer < 0 || renderer.gameObject.layer == targetLayer)
+                continue;
+
+            renderer.gameObject.layer = targetLayer;
+            adjustedRenderers++;
+        }
+
+        if (adjustedRenderers > 0)
+        {
+            SrLogger.LogMessage(
+                $"Adjusted {adjustedRenderers} remote avatar renderer layer(s) for the gameplay camera " +
+                $"(cullingMask=0x{cameraMask:X8}, fallbackLayer={defaultLayer}).");
+        }
+    }
+
+    private void SetRemoteBodyVisible(bool visible)
+    {
+        for (var index = 0; index < remoteRenderers.Length; index++)
+        {
+            var renderer = remoteRenderers[index];
+            if (renderer)
+                renderer.enabled = visible && index < remoteRendererDefaults.Length && remoteRendererDefaults[index];
+        }
+
+        remoteBodyVisible = visible;
+    }
 
     public void Update()
     {
@@ -168,6 +258,22 @@ internal partial class NetworkPlayer : MonoBehaviour
             SetUsername(model.Username);
 
             return;
+        }
+
+        if (!IsLocal)
+        {
+            EnsureRemoteRendererLayersVisibleToGameplayCamera();
+
+            var hasPose = RemotePlayerPosePolicy.ShouldRenderRemoteBody(model.HasReceivedState);
+            if (!hasPose)
+            {
+                if (remoteBodyVisible)
+                    SetRemoteBodyVisible(false);
+                return;
+            }
+
+            if (!remoteBodyVisible)
+                SetRemoteBodyVisible(true);
         }
 
         transformTimer -= UnityEngine.Time.unscaledDeltaTime;
@@ -273,15 +379,46 @@ internal partial class NetworkPlayer : MonoBehaviour
         //     var localBounds = renderer.localBounds;
         // }
 
-        if (IsLocal)
-            return;
-
-        collider.enabled = false;
-        collider.enabled = true;
+        // The remote avatar collider used to be toggled off/on every frame to "refresh" it. That forced a PhysX
+        // shape remove/re-add each frame (heavy next to many rigidbodies); a moved collider is synced by Unity
+        // at the next physics step anyway.
     }
 
     [UsedImplicitly]
-    public void LateUpdate() => AnimateArmY();
+    public void LateUpdate()
+    {
+        AnimateArmY();
+        ScaleUsernameWithDistance();
+    }
+
+    // Nametag size by distance: smaller up close, readable far away (constant on-screen size from
+    // NameTagReferenceDistance to NameTagMaxDistance), never absurdly large.
+    private const float NameTagReferenceDistance = 10f;
+    private const float NameTagMinScale = 0.7f;
+    private const float NameTagMaxDistance = 45f;
+    private Vector3 usernameBaseScale;
+
+    private void ScaleUsernameWithDistance()
+    {
+        if (IsLocal || !UsernamePanel)
+            return;
+
+        var camera = Camera.main;
+        if (!camera)
+            return;
+
+        if (usernameBaseScale == Vector3.zero)
+        {
+            usernameBaseScale = UsernamePanel.transform.localScale;
+            UsernamePanel.outlineWidth = 0.2f;
+            UsernamePanel.outlineColor = new Color32(0, 0, 0, 220);
+        }
+
+        var distance = Vector3.Distance(camera!.transform.position, UsernamePanel.transform.position);
+        var scale = Mathf.Clamp(distance, NameTagReferenceDistance * NameTagMinScale, NameTagMaxDistance) /
+                    NameTagReferenceDistance;
+        UsernamePanel.transform.localScale = usernameBaseScale * scale;
+    }
     
     private bool IsInLocalSceneGroup()
     {

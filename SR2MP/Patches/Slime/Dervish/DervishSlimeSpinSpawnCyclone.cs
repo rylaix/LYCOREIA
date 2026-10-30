@@ -13,6 +13,7 @@ internal static class DervishSlimeSpinSpawnCyclone
         if (HandlingPacket) return true;
 
         var networkActor = __instance.GetComponent<NetworkActor>();
+        if (!networkActor) return true;
         if (networkActor.LocallyOwned) return true;
         
         return false;

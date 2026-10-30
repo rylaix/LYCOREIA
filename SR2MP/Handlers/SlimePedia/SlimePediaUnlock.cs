@@ -10,12 +10,31 @@ internal sealed class SlimePediaUnlockHandler : BasePacketHandler<PediaUnlockPac
 {
     protected override bool Handle(PediaUnlockPacket packet, IPEndPoint? _)
     {
+        if (string.IsNullOrWhiteSpace(packet.ID))
+            return false;
+
+        var pediaLookup = GameContext.Instance.AutoSaveDirector._saveReferenceTranslation._pediaEntryLookup;
+        if (!pediaLookup.TryGetValue(packet.ID, out var pediaEntry) || pediaEntry == null)
+        {
+            SrLogger.LogWarning($"SlimePediaUnlock: unknown pedia entry '{packet.ID}', ignoring request.");
+            return false;
+        }
+
+        var pediaDirector = SceneContext.Instance.PediaDirector;
+        if (pediaDirector == null)
+            return false;
+
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
-        SceneContext.Instance.PediaDirector.Unlock(
-            GameContext.Instance.AutoSaveDirector
-                ._saveReferenceTranslation._pediaEntryLookup[packet.ID],
-            packet.Popup);
-        HandlingPacket = false;
+        try
+        {
+            if (!pediaDirector.IsUnlocked(pediaEntry))
+                pediaDirector.Unlock(pediaEntry, packet.Popup);
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
 
         return true;
     }

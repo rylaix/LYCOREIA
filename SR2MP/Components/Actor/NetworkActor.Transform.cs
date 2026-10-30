@@ -40,7 +40,7 @@ internal sealed partial class NetworkActor
     
     private void UpdateInterpolation()
     {
-        if (LocallyOwned || IsDestroyed || interpolationEnd <= interpolationStart)
+        if (LocallyOwned || IsLocalVacuumPrediction || IsDestroyed || interpolationEnd <= interpolationStart)
             return;
 
         var now = UnityEngine.Time.unscaledTime;
@@ -56,9 +56,17 @@ internal sealed partial class NetworkActor
         {
             transform.position = nextPosition;
             transform.rotation = nextRotation;
+            // Settled: stop rewriting idle actors every frame (hundreds of interop writes per frame) unless a
+            // dynamic body needs pinning. The next update packet reopens the interpolation window.
+            if (!rigidbody || rigidbody.isKinematic)
+            {
+                interpolationEnd = interpolationStart;
+                return;
+            }
         }
 
-        if (rigidbody)
+        // Unity rejects (and logs every frame) velocity writes on kinematic bodies.
+        if (rigidbody && !rigidbody.isKinematic)
             rigidbody.velocity = savedVelocity;
     }
 
@@ -105,7 +113,9 @@ internal sealed partial class NetworkActor
             ActorId  = actorId,
             Position = currentPosition,
             Rotation = currentRotation,
-            Velocity = currentVelocity
+            Velocity = currentVelocity,
+            Epoch    = ActorManager.GetEpoch(actorId.Value),
+            HasEpoch = true
         });
     }
 }

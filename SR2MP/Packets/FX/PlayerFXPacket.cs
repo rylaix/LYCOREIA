@@ -17,7 +17,8 @@ internal sealed class PlayerFXPacket : IPacket
         VacRunning,
         VacRunningStart,
         VacRunningEnd,
-        VacShootSound
+        VacShootSound,
+        VacShockwave
     }
 
     public PlayerFXType FX;
@@ -25,7 +26,9 @@ internal sealed class PlayerFXPacket : IPacket
     public string Player;
 
     public PacketType Type => PacketType.PlayerFX;
-    public PacketReliability Reliability => PacketReliability.Unreliable;
+    public PacketReliability Reliability => RequiresOrderedDelivery(FX)
+        ? PacketReliability.ReliableOrdered
+        : PacketReliability.Unreliable;
     public NetworkChannel Channel => NetworkChannel.FX;
 
     public void Serialise(PacketWriter writer)
@@ -46,5 +49,31 @@ internal sealed class PlayerFXPacket : IPacket
             Position = reader.ReadVector3();
         else
             Player = reader.ReadPooledStringOfSize(16)!;
+    }
+
+    internal static bool IsSuctionStateTransition(PlayerFXType fx)
+        => fx is PlayerFXType.VacRunningStart or PlayerFXType.VacRunningEnd;
+
+    private static bool RequiresOrderedDelivery(PlayerFXType fx)
+        => IsSuctionStateTransition(fx) || fx is PlayerFXType.VacRunning or PlayerFXType.VacShockwave;
+
+    internal static bool VerifySuctionStateProtocol()
+    {
+        var start = new PlayerFXPacket { FX = PlayerFXType.VacRunningStart };
+        var end = new PlayerFXPacket { FX = PlayerFXType.VacRunningEnd };
+        var running = new PlayerFXPacket { FX = PlayerFXType.VacRunning };
+        var shockwave = new PlayerFXPacket { FX = PlayerFXType.VacShockwave };
+
+        return IsSuctionStateTransition(start.FX)
+               && IsSuctionStateTransition(end.FX)
+               && !IsSuctionStateTransition(running.FX)
+               && !IsSuctionStateTransition(shockwave.FX)
+               && start.Reliability == PacketReliability.ReliableOrdered
+               && end.Reliability == PacketReliability.ReliableOrdered
+               && running.Reliability == PacketReliability.ReliableOrdered
+               && shockwave.Reliability == PacketReliability.ReliableOrdered
+               && IsPlayerSoundDictionary[start.FX]
+               && IsPlayerSoundDictionary[end.FX]
+               && !IsPlayerSoundDictionary[shockwave.FX];
     }
 }

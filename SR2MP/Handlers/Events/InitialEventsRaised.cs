@@ -11,11 +11,10 @@ internal sealed class InitialEventsRaisedHandler : BasePacketHandler<InitialEven
 {
     protected override bool Handle(InitialEventsRaisedPacket packet, IPEndPoint? _)
     {
-        if (packet.Entries.Count == 0)
+        if (packet.Entries == null)
             return false;
 
-        foreach (var entry in packet.Entries)
-            NetworkEventManager.ApplyEventRaised(entry.EventKey, entry.DataKey);
+        NetworkEventManager.ApplyEventSnapshot(packet.Entries);
 
         return false;
     }

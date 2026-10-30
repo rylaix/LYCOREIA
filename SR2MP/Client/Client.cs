@@ -1,11 +1,13 @@
 using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using JetBrains.Annotations;
 using SR2MP.Api;
 using SR2MP.Client.Managers;
 using SR2MP.Client.Models;
 using SR2MP.Components.UI;
+using SR2MP.Packets;
 using SR2MP.Packets.Api;
 using SR2MP.Packets.Internal;
 using SR2MP.Packets.Player;
@@ -29,10 +31,16 @@ public sealed class SR2MPClient
     private volatile bool isConnecting;
     private volatile bool connectionAcknowledged;
     private Timer? connectionTimeoutTimer;
+    private Timer? serverHeartbeatTimer;
+    private long connectionGeneration;
     private const int ConnectionTimeoutSeconds = 10;
+    private const int ServerHeartbeatIntervalSeconds = 5;
+    private const int ServerHeartbeatTimeoutSeconds = 20;
+    private long lastServerHeartbeatTicks;
 
     private bool shownConnectionError;
     private bool subscribedToQuitting;
+    private int disconnectScheduled;
 
     private readonly ClientPacketManager packetManager;
 
@@ -123,10 +131,23 @@ public sealed class SR2MPClient
         }
         
         isConnecting = true;
+        Interlocked.Exchange(ref disconnectScheduled, 0);
+        var attemptGeneration = Interlocked.Increment(ref connectionGeneration);
+        NetworkUpgradeManager.ResetClientSession();
+        // Reset before transport starts so currency states received while approval is in flight
+        // cannot be cleared by the later join snapshot.
+        NetworkCurrencyManager.ResetClientSession();
+        // Begin buffering actor deltas before ReceiveLoop starts. The server sends
+        // approval and its world snapshot over channels whose UDP delivery can
+        // interleave with live actor packets; waiting for ConnectionApprove here
+        // would let a newer actor mutation be overwritten by InitialActors.
+        ActorSnapshotDeltaBuffer.BeginSync();
 
         try
         {
             var parsedIp = IPAddress.Parse(serverIp);
+            Logger.LogDiagnostic("session", "connect-started",
+                $"targetAddressFamily={parsedIp.AddressFamily}; targetPort={port}");
 
             if (parsedIp.AddressFamily == AddressFamily.InterNetworkV6)
             {
@@ -150,10 +171,10 @@ public sealed class SR2MPClient
             serverEndPoint = new IPEndPoint(parsedIp, port);
             udpClient.Connect(serverEndPoint);
 
-            udpClient.Client.ReceiveBufferSize = 512 * 1024;
-            udpClient.Client.SendBufferSize = 512 * 1024;
+            udpClient.Client.ReceiveBufferSize = 2 * 1024 * 1024;
+            udpClient.Client.SendBufferSize = 2 * 1024 * 1024;
 
-            PlayerId = PlayerIdGenerator.GeneratePersistentPlayerId();
+            PlayerId = PlayerIdGenerator.GenerateSessionPlayerId();
 
             reliabilityManager = new ReliabilityManager(SendRaw);
             reliabilityManager.Start();
@@ -163,13 +184,13 @@ public sealed class SR2MPClient
             isConnected = true;
             connectionAcknowledged = false;
 
-            receiveThread = new Thread(new Action(ReceiveLoop))
+            receiveThread = new Thread(new Action(() => ReceiveLoop(attemptGeneration)))
             {
                 IsBackground = true
             };
             receiveThread.Start();
 
-            connectionTimeoutTimer = new Timer(CheckConnectionTimeout, null,
+            connectionTimeoutTimer = new Timer(CheckConnectionTimeout, attemptGeneration,
                 TimeSpan.FromSeconds(ConnectionTimeoutSeconds), Timeout.InfiniteTimeSpan);
 
             if (!subscribedToQuitting)
@@ -192,16 +213,16 @@ public sealed class SR2MPClient
         catch (Exception ex)
         {
             SrLogger.LogError($"Error connecting to the Server: {ex}");
-            connectionAcknowledged = false;
-            isConnected = false;
-            isConnecting = false;
+            RejectConnection();
             throw;
         }
     }
 
     private void CheckConnectionTimeout(object? state)
     {
-        if (connectionAcknowledged || !isConnected)
+        if (state is not long attemptGeneration ||
+            !ClientConnectionGenerationPolicy.IsCurrent(attemptGeneration,
+                Interlocked.Read(ref connectionGeneration)) || connectionAcknowledged || !isConnected)
             return;
 
         SrLogger.LogError("Connection timeout: Server did not respond within 10 seconds");
@@ -212,9 +233,100 @@ public sealed class SR2MPClient
 
     internal void UpdateConnectionStatus(bool state) => isConnected = state;
 
-    private void ReceiveLoop()
+    internal void RecordServerHeartbeat()
+        => Interlocked.Exchange(ref lastServerHeartbeatTicks, DateTime.UtcNow.Ticks);
+
+    private void CheckServerHeartbeat(object? state)
     {
-        if (udpClient == null)
+        if (state is not long attemptGeneration ||
+            !ClientConnectionGenerationPolicy.IsCurrent(attemptGeneration,
+                Interlocked.Read(ref connectionGeneration)) || !IsJoined)
+            return;
+
+        SendPacket(new EmptyPacket
+        {
+            Type = PacketType.Heartbeat,
+            Reliability = PacketReliability.Unreliable,
+            Channel = NetworkChannel.Important
+        });
+
+        if (!ServerHeartbeatTimeoutPolicy.IsExpired(
+                Interlocked.Read(ref lastServerHeartbeatTicks), DateTime.UtcNow.Ticks,
+                TimeSpan.FromSeconds(ServerHeartbeatTimeoutSeconds).Ticks))
+            return;
+
+        if (Interlocked.Exchange(ref disconnectScheduled, 1) != 0)
+            return;
+
+        SrLogger.LogError("Server heartbeat timed out; disconnecting the stale session.");
+        var dispatcher = MainThreadDispatcher.Instance;
+        if (dispatcher is not null)
+        {
+            dispatcher.Enqueue(() =>
+            {
+                if (!isConnected || !ClientConnectionGenerationPolicy.IsCurrent(attemptGeneration,
+                        Interlocked.Read(ref connectionGeneration)))
+                    return;
+
+                if (!ServerHeartbeatTimeoutPolicy.IsExpired(
+                        Interlocked.Read(ref lastServerHeartbeatTicks), DateTime.UtcNow.Ticks,
+                        TimeSpan.FromSeconds(ServerHeartbeatTimeoutSeconds).Ticks))
+                {
+                    Interlocked.CompareExchange(ref disconnectScheduled, 0, 1);
+                    return;
+                }
+
+                MultiplayerUI.Instance.RegisterSystemMessage(
+                    "Lost connection to the host.",
+                    $"SYSTEM_SERVER_HEARTBEAT_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                    MultiplayerUI.SystemMessageDisconnect);
+                Disconnect();
+            });
+            return;
+        }
+
+        // During shutdown Unity is unavailable. Stop the receive loop without
+        // touching game objects from this timer thread.
+        isConnected = false;
+        isConnecting = false;
+        Interlocked.Increment(ref connectionGeneration);
+        receiveThread = null;
+        udpClient?.Close();
+    }
+
+    internal void RejectConnection()
+    {
+        Interlocked.Increment(ref connectionGeneration);
+        ActorSnapshotDeltaBuffer.Cancel();
+        isConnected = false;
+        isConnecting = false;
+        connectionAcknowledged = false;
+
+        connectionTimeoutTimer?.Dispose();
+        connectionTimeoutTimer = null;
+        serverHeartbeatTimer?.Dispose();
+        serverHeartbeatTimer = null;
+
+        PacketDeduplication.Clear();
+        reliabilityManager?.Stop();
+        reliabilityManager = null;
+
+        udpClient?.Close();
+        udpClient = null;
+        serverEndPoint = null;
+        receiveThread = null;
+
+        NetworkStringPool.Clear();
+        ApiHandlers.ClearNetIds();
+        Interlocked.Exchange(ref disconnectScheduled, 0);
+    }
+
+    private void ReceiveLoop(long attemptGeneration)
+    {
+        var receiveClient = udpClient;
+        if (receiveClient == null ||
+            !ClientConnectionGenerationPolicy.IsCurrent(attemptGeneration,
+                Interlocked.Read(ref connectionGeneration)))
         {
             SrLogger.LogError("UDP client is null in ReceiveLoop!");
             return;
@@ -222,7 +334,7 @@ public sealed class SR2MPClient
 
         SrLogger.LogMessage("Client ReceiveLoop started!");
 
-        EndPoint remoteEp = udpClient.Client.AddressFamily switch
+        EndPoint remoteEp = receiveClient.Client.AddressFamily switch
         {
             AddressFamily.InterNetwork => new IPEndPoint(IPAddress.Any, 0),
             AddressFamily.InterNetworkV6 => new IPEndPoint(IPAddress.IPv6Any, 0),
@@ -233,11 +345,13 @@ public sealed class SR2MPClient
 
         try
         {
-            while (isConnected)
+            while (isConnected && ClientConnectionGenerationPolicy.IsCurrent(attemptGeneration,
+                       Interlocked.Read(ref connectionGeneration)) &&
+                   Volatile.Read(ref disconnectScheduled) == 0)
             {
                 try
                 {
-                    var receivedBytes = udpClient.Client.ReceiveFrom(receiveBuffer, ref remoteEp);
+                    var receivedBytes = receiveClient.Client.ReceiveFrom(receiveBuffer, ref remoteEp);
 
                     if (receivedBytes == 0)
                         continue;
@@ -262,8 +376,7 @@ public sealed class SR2MPClient
                         shownConnectionError = true;
                     }
 
-                    MultiplayerUI.Instance.RegisterSystemMessage("Could not join the world, check the MelonLoader console for details", $"SYSTEM_JOIN_10054_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}", MultiplayerUI.SystemMessageClose);
-                    Disconnect();
+                    ScheduleDisconnectFromReceiveLoop(attemptGeneration);
                 }
                 catch (Exception ex)
                 {
@@ -277,6 +390,42 @@ public sealed class SR2MPClient
         }
 
         SrLogger.LogMessage("Client ReceiveLoop ended!");
+    }
+
+    private void ScheduleDisconnectFromReceiveLoop(long attemptGeneration)
+    {
+        if (!ClientConnectionGenerationPolicy.ShouldScheduleReceiveFailure(isConnected, attemptGeneration,
+                Interlocked.Read(ref connectionGeneration)))
+            return;
+
+        if (Interlocked.Exchange(ref disconnectScheduled, 1) != 0)
+            return;
+
+        var dispatcher = MainThreadDispatcher.Instance;
+        if (dispatcher is not null)
+        {
+            dispatcher.Enqueue(() =>
+            {
+                if (!ClientConnectionGenerationPolicy.ShouldScheduleReceiveFailure(isConnected,
+                        attemptGeneration, Interlocked.Read(ref connectionGeneration)))
+                    return;
+
+                MultiplayerUI.Instance.RegisterSystemMessage(
+                    "Could not join the world, check the MelonLoader console for details",
+                    $"SYSTEM_JOIN_SOCKET_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                    MultiplayerUI.SystemMessageClose);
+                Disconnect();
+            });
+            return;
+        }
+
+        // The dispatcher is unavailable only during shutdown. Stop the socket loop
+        // without touching Unity objects from this worker thread.
+        isConnected = false;
+        isConnecting = false;
+        Interlocked.Increment(ref connectionGeneration);
+        receiveThread = null;
+        udpClient?.Close();
     }
 
     internal void SendPacket<T>(T packet) where T : IPacket
@@ -323,6 +472,7 @@ public sealed class SR2MPClient
                 sequenceNumber = reliabilityManager?.GetNextSequenceNumber(channel, packetType, serverEndPoint) ?? 0;
 
             var splitResult = PacketChunkManager.SplitPacket(data, reliability, channel, sequenceNumber, out var packetId);
+            Logger.RecordPacket("out", packetType, data.Length, (ushort)splitResult.Count);
 
             if (reliability.HasFlag(PacketReliability.Reliable))
                 reliabilityManager?.TrackPacket(splitResult, serverEndPoint, packetId, data[0], reliability);
@@ -361,6 +511,11 @@ public sealed class SR2MPClient
         if (!isConnected)
             return;
 
+        Logger.LogDiagnostic("session", "client-disconnecting", $"clientPeer={PlayerId}");
+
+        Interlocked.Increment(ref connectionGeneration);
+        ActorSnapshotDeltaBuffer.Cancel();
+
         try
         {
             MultiplayerUI.Instance.ClearChatMessages();
@@ -395,6 +550,8 @@ public sealed class SR2MPClient
 
             connectionTimeoutTimer?.Dispose();
             connectionTimeoutTimer = null;
+            serverHeartbeatTimer?.Dispose();
+            serverHeartbeatTimer = null;
 
             reliabilityManager?.Stop();
 
@@ -433,6 +590,11 @@ public sealed class SR2MPClient
         {
             SrLogger.LogError($"Error during disconnect: {ex}");
         }
+        finally
+        {
+            if (!isConnected)
+                Interlocked.Exchange(ref disconnectScheduled, 0);
+        }
     }
 
     internal void NotifyConnected()
@@ -443,6 +605,13 @@ public sealed class SR2MPClient
 
         connectionTimeoutTimer?.Dispose();
         connectionTimeoutTimer = null;
+
+        RecordServerHeartbeat();
+        serverHeartbeatTimer?.Dispose();
+        serverHeartbeatTimer = new Timer(CheckServerHeartbeat,
+            Interlocked.Read(ref connectionGeneration),
+            TimeSpan.FromSeconds(ServerHeartbeatIntervalSeconds),
+            TimeSpan.FromSeconds(ServerHeartbeatIntervalSeconds));
 
         InvokeConnected();
     }

@@ -1,9 +1,11 @@
 using System.Net;
 using JetBrains.Annotations;
 using SR2MP.Api;
+using SR2MP.Components.FX;
 using SR2MP.Components.UI;
 using SR2MP.Packets;
 using SR2MP.Packets.Api;
+using SR2MP.Packets.Actor;
 using SR2MP.Packets.Player;
 using SR2MP.Packets.Utils;
 using SR2MP.Server.Managers;
@@ -63,6 +65,9 @@ public sealed class SR2MPServer
 
         NetworkManager.OnDataReceived += OnDataReceived;
         ClientManager.OnClientRemoved += OnClientRemoved;
+        // A client that reconnects from the same address must start with fresh ordered streams on the host.
+        ClientManager.OnClientAdded += client => NetworkManager.ResetReliabilityPeer(client.EndPoint);
+        ClientManager.OnClientRemoved += client => NetworkManager.ResetReliabilityPeer(client.EndPoint);
     }
 
     internal void Start(int port, bool enableIPv6)
@@ -79,9 +84,12 @@ public sealed class SR2MPServer
             return;
         }
 
+        NetworkUpgradeManager.ResetHostSession();
+
         try
         {
-            PlayerId = DevMode ? "PLAYER_TEST_MODE" : PlayerIdGenerator.GeneratePersistentPlayerId();
+            PlayerId = DevMode ? "PLAYER_TEST_MODE" : PlayerIdGenerator.GenerateSessionPlayerId();
+            Logger.SetDiagnosticHostId(PlayerId);
 
             packetManager.RegisterHandlers(Main.Core);
             
@@ -93,6 +101,7 @@ public sealed class SR2MPServer
 
             NetworkManager.Start(port, enableIPv6);
             Port = port;
+            Logger.LogDiagnostic("session", "host-started", $"port={port}; ipv6={enableIPv6}; hostPeer={PlayerId}");
             timeoutTimer = new Timer(CheckClientTimeouts, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
             InvokeServerStarted();
             MultiplayerUI.Instance.RegisterSystemMessage(
@@ -133,6 +142,19 @@ public sealed class SR2MPServer
         if (!NetworkManager.IsRunning)
             return;
 
+        var heartbeatAck = new EmptyPacket
+        {
+            Type = PacketType.HeartbeatAck,
+            Reliability = PacketReliability.Unreliable,
+            Channel = NetworkChannel.Important
+        };
+
+        foreach (var client in ClientManager.GetAllClients())
+        {
+            if (!client.IsTimedOut())
+                SendToClient(heartbeatAck, client.EndPoint);
+        }
+
         ClientManager.RemoveTimedOutClients();
     }
 
@@ -159,44 +181,51 @@ public sealed class SR2MPServer
     private void HandleClientRemoved(ClientInfo client)
     {
         var playerId = client.PlayerId;
-        
+
         var player = PlayerManager.GetPlayer(playerId);
-        if (player == null) return;
-
-        PlayerManager.RemovePlayer(playerId);
-
-        if (PlayerObjects.TryGetValue(playerId, out var playerObj))
+        if (player != null)
         {
-            if (playerObj)
-                Object.Destroy(playerObj);
-            
-            PlayerObjects.Remove(playerId);
+            RemoteVacuumSuctionFX.ForgetPendingPlayer(playerId);
+            PlayerManager.RemovePlayer(playerId);
+
+            if (PlayerObjects.TryGetValue(playerId, out var playerObj))
+            {
+                if (playerObj)
+                    Object.Destroy(playerObj);
+
+                PlayerObjects.Remove(playerId);
+            }
+
+            var leavePacket = new PlayerLeavePacket
+            {
+                Type = PacketType.BroadcastPlayerLeave,
+                PlayerId = playerId
+            };
+
+            SendToAll(leavePacket);
+
+            SrLogger.LogMessage($"Player {playerId} left the server");
+
+            var leaveChatPacket = new ChatMessagePacket
+            {
+                Username = "SYSTEM",
+                Message = $"{player.Username} left the world!",
+                MessageID = $"SYSTEM_LEAVE_{playerId}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                MessageType = MultiplayerUI.SystemMessageDisconnect
+            };
+            SendToAll(leaveChatPacket);
+
+            MultiplayerUI.Instance.RegisterSystemMessage(
+                $"{player.Username} left the world!",
+                $"SYSTEM_LEAVE_HOST_{playerId}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                MultiplayerUI.SystemMessageDisconnect
+            );
         }
 
-        var leavePacket = new PlayerLeavePacket
-        {
-            Type = PacketType.BroadcastPlayerLeave,
-            PlayerId = playerId
-        };
-
-        SendToAll(leavePacket);
-
-        SrLogger.LogMessage($"Player {playerId} left the server");
-
-        var leaveChatPacket = new ChatMessagePacket
-        {
-            Username = "SYSTEM",
-            Message = $"{player.Username} left the world!",
-            MessageID = $"SYSTEM_LEAVE_{playerId}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-            MessageType = MultiplayerUI.SystemMessageDisconnect
-        };
-        SendToAll(leaveChatPacket);
-
-        MultiplayerUI.Instance.RegisterSystemMessage(
-            $"{player.Username} left the world!",
-            $"SYSTEM_LEAVE_HOST_{playerId}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-            MultiplayerUI.SystemMessageDisconnect
-        );
+#if SR2MP_TEST
+        if (Environment.GetEnvironmentVariable("SR2MP_TEST_TRACE_LIFECYCLE") == "1")
+            SrLogger.LogMessage($"[SR2MP_TEST] disconnected-player-cleanup player={playerId} playerModelPresent={player != null}");
+#endif
         
         MainThreadDispatcher.Instance.Enqueue(() =>
         {
@@ -210,6 +239,8 @@ public sealed class SR2MPServer
     {
         if (!NetworkManager.IsRunning)
             return;
+
+        Logger.LogDiagnostic("session", "host-stopping", $"hostPeer={PlayerId}; clients={GetClientCount}");
 
         var closeChatMessage = new ChatMessagePacket
         {
@@ -269,7 +300,24 @@ public sealed class SR2MPServer
     }
 
     internal void SendToClient<T>(T packet, IPEndPoint endPoint) where T : IPacket
-        => PrepareAndSendToClient(packet, packet.Reliability, packet.Channel, endPoint, SerialiseInternalPacket<T>.Serialiser);
+    {
+        packet = ActorWorldRevision.Stamp(packet);
+        PrepareAndSendToClient(packet, packet.Reliability, packet.Channel, endPoint,
+            SerialiseInternalPacket<T>.Serialiser);
+    }
+
+    internal void SendCachedCaptureResult(ActorTransferPacket packet, IPEndPoint endPoint)
+    {
+        if (!packet.HasWorldRevision || !packet.CaptureIntent || !packet.CaptureCommit ||
+            !packet.CaptureApproved)
+            throw new InvalidOperationException("Only a stamped accepted capture result may be replayed.");
+        // Replay the original mutation revision; a retry must not outrank a newer destroy tombstone.
+#if SR2MP_TEST
+        SrLogger.LogMessage($"[SR2MP_TEST] cached capture ACK replay actor={packet.ActorId.Value:X} revision={packet.WorldRevision} consume={packet.CaptureConsumesActor}");
+#endif
+        PrepareAndSendToClient(packet, packet.Reliability, packet.Channel, endPoint,
+            SerialiseInternalPacket<ActorTransferPacket>.Serialiser);
+    }
 
     /// <summary>
     /// Sends a custom packet to a specific client endpoint.
@@ -309,6 +357,7 @@ public sealed class SR2MPServer
         {
             writeAction(writer, state);
             var data = writer.ToSpan();
+            Logger.RecordPacket("out", data.Length > 0 ? data[0] : (byte)0, data.Length, 1);
 
             NetworkManager.Send(data, endPoint, reliability, channel);
 
@@ -321,7 +370,10 @@ public sealed class SR2MPServer
     }
 
     internal void SendToAll<T>(T packet) where T : IPacket
-        => PrepareAndSendToAll(packet, packet.Reliability, packet.Channel, SerialiseInternalPacket<T>.Serialiser);
+    {
+        packet = ActorWorldRevision.Stamp(packet);
+        PrepareAndSendToAll(packet, packet.Reliability, packet.Channel, SerialiseInternalPacket<T>.Serialiser);
+    }
 
     /// <summary>
     /// Broadcasts a custom packet to all connected clients.
@@ -350,6 +402,7 @@ public sealed class SR2MPServer
         {
             writeAction(writer, state);
             var data = writer.ToSpan();
+            Logger.RecordPacket("out", data.Length > 0 ? data[0] : (byte)0, data.Length, ClientManager.ClientCount > 0 ? (ushort)1 : (ushort)0);
 
             NetworkManager.Broadcast(data, ClientManager.GetAllClients(), reliability, channel);
 
@@ -381,7 +434,11 @@ public sealed class SR2MPServer
     }
 
     internal void SendToAllExcept<T>(T packet, IPEndPoint? excludedClientInfo) where T : IPacket
-        => PrepareAndSendToAllExcept(packet, packet.Reliability, packet.Channel, SerialiseInternalPacket<T>.Serialiser, excludedClientInfo);
+    {
+        packet = ActorWorldRevision.Stamp(packet);
+        PrepareAndSendToAllExcept(packet, packet.Reliability, packet.Channel,
+            SerialiseInternalPacket<T>.Serialiser, excludedClientInfo);
+    }
 
     private void PrepareAndSendToAllExcept<T>(T state, PacketReliability reliability, NetworkChannel channel,
         PacketWriterDelegate<T> writeAction, IPEndPoint? excludedClientInfo)

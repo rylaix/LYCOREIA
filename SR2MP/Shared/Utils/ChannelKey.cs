@@ -10,6 +10,8 @@ namespace SR2MP.Shared.Utils;
 internal readonly struct ChannelKey : IEquatable<ChannelKey>
 {
     private readonly IPEndPoint EndPoint;
+
+    internal IPEndPoint Peer => EndPoint;
     private readonly NetworkChannel Channel;
     private readonly byte PacketType;
 

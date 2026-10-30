@@ -1,3 +1,5 @@
+using Il2CppMonomiPark.SlimeRancher.DataModel;
+
 namespace SR2MP.Shared.Managers;
 
 internal static partial class NetworkGadgetManager
@@ -33,6 +35,19 @@ internal static partial class NetworkGadgetManager
     {
         CannonFireTimes[gadgetId] = nextFireTime;
 
+        ApplyCannonFireTimeToLoadedModel(gadgetId, nextFireTime, playEffects: true);
+    }
+
+    internal static void ApplyPendingCannonFireTime(GadgetModel? model)
+    {
+        if (model == null || !CannonFireTimes.TryGetValue(model.actorId.Value, out var nextFireTime))
+            return;
+
+        ApplyCannonFireTimeToLoadedModel(model.actorId.Value, nextFireTime, playEffects: false);
+    }
+
+    private static void ApplyCannonFireTimeToLoadedModel(long gadgetId, double nextFireTime, bool playEffects)
+    {
         if (!TryGetGadgetModel(gadgetId, out var model) || model == null)
             return;
 
@@ -46,7 +61,8 @@ internal static partial class NetworkGadgetManager
 
         cannon._nextFireTime = nextFireTime;
 
-        PlayCannonFireEffects(cannon);
+        if (playEffects)
+            PlayCannonFireEffects(cannon);
     }
     
     private static LinkedCannonOutput? ResolveCannonOutput(LinkedCannonInput cannon)

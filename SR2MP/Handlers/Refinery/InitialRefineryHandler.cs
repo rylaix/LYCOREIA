@@ -11,24 +11,7 @@ internal sealed class InitialRefineryHandler : BasePacketHandler<InitialRefinery
 {
     protected override bool Handle(InitialRefineryPacket packet, IPEndPoint? _)
     {
-        StartCoroutine(InitializeRefinery(packet));
+        SR2MP.Shared.Managers.NetworkRefineryManager.ReceiveSnapshot(packet);
         return false;
-    }
-
-    private static IEnumerator InitializeRefinery(InitialRefineryPacket packet)
-    {
-        yield return null;
-
-        var newItemCounts = new CppCollections.Dictionary<IdentifiableType, int>();
-
-        foreach (var item in packet.Items)
-        {
-            if (ActorManager.ActorTypes.TryGetValue(item.Key, out var identType))
-                newItemCounts.Add(identType, item.Value);
-        }
-
-        HandlingPacket = true;
-        SceneContext.Instance.GadgetDirector._model._itemCounts = newItemCounts;
-        HandlingPacket = false;
     }
 }

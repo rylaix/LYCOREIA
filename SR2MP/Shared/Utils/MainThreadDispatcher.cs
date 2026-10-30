@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
 using Il2CppInterop.Runtime.Attributes;
 using MelonLoader;
+using SR2MP.Client.Managers;
+using SR2MP.Components.FX;
 using SR2MP.Packets.Utils;
+using SR2MP.Shared.Managers;
 using Starlight.Storage;
 
 namespace SR2MP.Shared.Utils;
@@ -81,6 +84,27 @@ internal sealed class MainThreadDispatcher : MonoBehaviour
                 PacketReader.Return(serverCache.Reader);
             }
         }
+
+        NetworkWeatherManager.Pump();
+        NetworkSanctuaryManager.Pump();
+        NetworkPrismaDisruptionManager.Pump();
+        NetworkStabilizingFieldSpawnerManager.Pump();
+        NetworkSlimeBehaviorManager.Pump();
+        NetworkUpgradeManager.PumpPendingRequests();
+        NetworkRefineryManager.Reconcile();
+        NetworkProgressionUnlockManager.Pump();
+        NetworkMarketManager.Pump();
+        NetworkVacPaletteManager.Pump();
+#if SR2MP_TEST
+        TestAvatarRig.Pump();
+#endif
+        RemoteVacuumSuctionFX.PumpPendingPlayerStates();
+#if SR2MP_DEEPLOG
+        DeepLogSampler.Pump();
+#endif
+#if SR2MP_TEST
+        TestBootstrap.Pump();
+#endif
     }
 
     [HideFromIl2Cpp]

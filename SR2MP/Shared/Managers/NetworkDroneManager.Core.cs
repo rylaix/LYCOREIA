@@ -1,5 +1,6 @@
 using System.Collections;
 using Il2CppMonomiPark.SlimeRancher.DataModel;
+using Il2CppMonomiPark.SlimeRancher.Drone;
 using SR2MP.Components.Drone;
 
 namespace SR2MP.Shared.Managers;
@@ -7,9 +8,11 @@ namespace SR2MP.Shared.Managers;
 internal static partial class NetworkDroneManager
 {
     internal static readonly Dictionary<long, string> PendingOwners = new();
+    internal static readonly Dictionary<long, List<(string ClaimerId, string PreviousOwnerId)>> PendingOwnerTransitions = new();
     
     // Last tracked owner per Drone Station
     internal static readonly Dictionary<long, string> CachedOwners = new();
+    private static readonly Dictionary<long, string> ExplicitlyReleasedOwners = new();
 
     private static bool subscribedToServerStart;
     private static bool initialized;
@@ -30,8 +33,206 @@ internal static partial class NetworkDroneManager
 
         initialized = true;
 
+        Main.Client.OnConnected += _ =>
+        {
+            PendingOwnerTransitions.Clear();
+            ExplicitlyReleasedOwners.Clear();
+            ClearPendingOwnerClaims();
+            ClearPendingSyncState();
+        };
+        Main.Client.OnDisconnected += () =>
+        {
+            PendingOwnerTransitions.Clear();
+            ExplicitlyReleasedOwners.Clear();
+            ClearPendingOwnerClaims();
+            ClearPendingSyncState();
+        };
+        Main.Server.OnServerStarted += () =>
+        {
+            PendingOwnerTransitions.Clear();
+            ExplicitlyReleasedOwners.Clear();
+            ClearPendingOwnerClaims();
+            ClearPendingSyncState();
+        };
+
         StartCoroutine(OwnUnownedDronesLoop());
     }
+
+    internal static bool TryGetCurrentOwner(long stationId, out string ownerId)
+    {
+        if (NetworkDrone.Drones.TryGetValue(stationId, out var drone) && drone)
+        {
+            ownerId = drone.CurrentOwnerId ?? string.Empty;
+            return true;
+        }
+
+        if (PendingOwners.TryGetValue(stationId, out ownerId))
+        {
+            ownerId ??= string.Empty;
+            return true;
+        }
+
+        if (CachedOwners.TryGetValue(stationId, out ownerId))
+        {
+            ownerId ??= string.Empty;
+            return true;
+        }
+
+        ownerId = string.Empty;
+        return false;
+    }
+
+    internal static bool IsCurrentOwner(long stationId, string playerId)
+        => !string.IsNullOrWhiteSpace(playerId) &&
+           TryGetCurrentOwner(stationId, out var ownerId) &&
+           string.Equals(ownerId, playerId, StringComparison.Ordinal);
+
+    internal static bool IsDroneOwnerInScene(string playerId, int sceneId)
+    {
+        if (string.IsNullOrWhiteSpace(playerId))
+            return false;
+
+        foreach (var drone in NetworkDrone.Drones.Values)
+        {
+            if (drone &&
+                string.Equals(drone.CurrentOwnerId, playerId, StringComparison.Ordinal) &&
+                drone.IsInSceneGroup(sceneId))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The generic resource-store callback has no drone argument. Attribute it only
+    /// when one locally owned ExplorerDrone station can be identified in that scene;
+    /// ambiguous updates are suppressed instead of guessing an owner.
+    /// </summary>
+    internal static bool TryGetUniqueOwnedExplorerStationInScene(
+        string playerId, int sceneId, out long stationId)
+    {
+        stationId = 0;
+        if (string.IsNullOrWhiteSpace(playerId))
+            return false;
+
+        foreach (var drone in NetworkDrone.Drones.Values)
+        {
+            if (!drone || !string.Equals(drone.CurrentOwnerId, playerId, StringComparison.Ordinal) ||
+                !drone.GetComponent<ExplorerDrone>() || !drone.IsInSceneGroup(sceneId))
+                continue;
+
+            if (stationId != 0)
+            {
+                stationId = 0;
+                return false;
+            }
+
+            stationId = drone.StationId;
+        }
+
+        return stationId != 0;
+    }
+
+    internal static bool IsOwnedExplorerStationInScene(string playerId, long stationId, int sceneId)
+    {
+        if (string.IsNullOrWhiteSpace(playerId) || stationId == 0 ||
+            !TryGetCurrentOwner(stationId, out var ownerId) ||
+            !string.Equals(ownerId, playerId, StringComparison.Ordinal))
+            return false;
+
+        var stationModel = GameState.GetIdentifiableModel(new ActorId(stationId))?.TryCast<DroneStationGadgetModel>();
+        if (stationModel == null || stationModel._type != DroneType.EXPLORER_DRONE)
+            return false;
+
+        if (!GameState.droneModel.TryGetExplorerDroneByStationId(new ActorId(stationId), out var explorerModel) ||
+            explorerModel == null)
+            return false;
+
+        try
+        {
+            return stationModel.sceneGroup != null &&
+                   NetworkSceneManager.GetPersistentID(stationModel.sceneGroup) == sceneId;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsExplicitlyReleasedOwner(long stationId, string ownerId)
+        => ExplicitlyReleasedOwners.TryGetValue(stationId, out var releasedOwnerId) &&
+           string.Equals(releasedOwnerId, ownerId, StringComparison.Ordinal);
+
+    internal static void RecordExplicitOwnerRelease(long stationId, string ownerId)
+    {
+        if (stationId != 0 && !string.IsNullOrWhiteSpace(ownerId))
+            ExplicitlyReleasedOwners[stationId] = ownerId;
+    }
+
+    internal static void ClearExplicitOwnerRelease(long stationId)
+        => ExplicitlyReleasedOwners.Remove(stationId);
+
+    private static void ClearPendingOwnerClaims()
+    {
+        foreach (var drone in NetworkDrone.Drones.Values)
+            if (drone)
+                drone.CancelPendingOwnerClaim();
+    }
+
+    internal static string ReconcileOwnerSnapshot(long stationId, string snapshotOwnerId)
+    {
+        snapshotOwnerId ??= string.Empty;
+
+        if (!PendingOwnerTransitions.Remove(stationId, out var transitions))
+            return snapshotOwnerId;
+
+        return ReplayOwnerTransitions(snapshotOwnerId, transitions);
+    }
+
+    private static string ReplayOwnerTransitions(
+        string snapshotOwnerId,
+        IEnumerable<(string ClaimerId, string PreviousOwnerId)> transitions)
+    {
+        // Ownership updates can arrive on WorldState before the ActorCritical station
+        // snapshot. These updates were already authenticated by the host, so replay
+        // them over the possibly older snapshot in their reliable channel order.
+        // A release keeps PreviousOwnerId as the authority identity until a replacement
+        // claim arrives; treating release as an empty owner makes that claim fail.
+        var ownerId = snapshotOwnerId;
+        foreach (var transition in transitions)
+        {
+            if (string.IsNullOrEmpty(transition.ClaimerId))
+            {
+                if (string.IsNullOrEmpty(ownerId))
+                    ownerId = transition.PreviousOwnerId;
+                continue;
+            }
+
+            ownerId = transition.ClaimerId;
+        }
+
+        return ownerId;
+    }
+
+#if SR2MP_TEST
+    internal static bool VerifyOwnerSnapshotReconciliation()
+    {
+        var releaseThenClaim = new[]
+        {
+            (ClaimerId: string.Empty, PreviousOwnerId: "owner-a"),
+            (ClaimerId: "owner-b", PreviousOwnerId: "owner-a")
+        };
+
+        return ReplayOwnerTransitions("owner-a", releaseThenClaim) == "owner-b"
+               && ReplayOwnerTransitions(string.Empty, releaseThenClaim) == "owner-b"
+               && ReplayOwnerTransitions(
+                   "owner-a",
+                   new[] { (ClaimerId: string.Empty, PreviousOwnerId: "owner-a") }) == "owner-a"
+               && ReplayOwnerTransitions(
+                   "owner-b",
+                   new[] { (ClaimerId: "owner-b", PreviousOwnerId: "owner-a") }) == "owner-b";
+    }
+#endif
 
     private static IEnumerator OwnUnownedDronesLoop()
     {
@@ -78,6 +279,7 @@ internal static partial class NetworkDroneManager
 
     private static void OnServerStarted()
     {
+        ExplicitlyReleasedOwners.Clear();
         ClaimLoadedDrones(NetworkActorManager.GetAllOfType<RanchDroneModel>());
         ClaimLoadedDrones(NetworkActorManager.GetAllOfType<ExplorerDroneModel>());
     }
@@ -189,6 +391,7 @@ internal static partial class NetworkDroneManager
                     continue;
 
                 var position = drone.transform.position;
+                var previousOwnerId = drone.CurrentOwnerId;
                 var newOwner = LocalID;
                 var bestDistance = float.MaxValue;
 
@@ -211,7 +414,7 @@ internal static partial class NetworkDroneManager
                 {
                     StationId = stationId,
                     ClaimerID = newOwner,
-                    PreviousOwnerID = string.Empty
+                    PreviousOwnerID = previousOwnerId
                 });
             }
             catch { /* ignored */ }

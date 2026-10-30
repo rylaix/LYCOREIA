@@ -1,0 +1,140 @@
+name: Build release
+
+# Manual: Actions → "Build release" → Run workflow → fill in version and name → Run.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (x.y.z or x.y.z-suffix), becomes tag v<version>"
+        required: true
+        type: string
+      release_name:
+        description: "Release title, e.g. 'Lycoreia 1.0.0 RC 1'"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        type: boolean
+        default: true
+      deeplog:
+        description: "Also publish the -deeplog diagnostics package"
+        type: boolean
+        default: true
+      notes:
+        description: "Text shown above the auto-generated release notes (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      TAG: v${{ inputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version and tag
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
+            || { echo "::error::Invalid version '$VERSION'"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists"; exit 1
+          fi
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Fetch reference libraries (private)
+        env:
+          REFERENCE_LIBS_URL: ${{ secrets.REFERENCE_LIBS_URL }}
+          REFERENCE_LIBS_TOKEN: ${{ secrets.REFERENCE_LIBS_TOKEN }}
+          REFERENCE_LIBS_SHA256: ${{ secrets.REFERENCE_LIBS_SHA256 }}
+        run: |
+          [[ -n "$REFERENCE_LIBS_URL" ]] \
+            || { echo "::error::Secret REFERENCE_LIBS_URL is not set (see docs/BUILDING.md)"; exit 1; }
+          headers=(-H "Accept: application/octet-stream")
+          [[ -n "$REFERENCE_LIBS_TOKEN" ]] && headers+=(-H "Authorization: Bearer $REFERENCE_LIBS_TOKEN")
+          curl -fsSL "${headers[@]}" -o "$RUNNER_TEMP/reference-libs.zip" "$REFERENCE_LIBS_URL"
+          if [[ -n "$REFERENCE_LIBS_SHA256" ]]; then
+            echo "$REFERENCE_LIBS_SHA256  $RUNNER_TEMP/reference-libs.zip" | sha256sum -c -
+          fi
+          mkdir -p SR2MP/libraries
+          unzip -q -o "$RUNNER_TEMP/reference-libs.zip" -d SR2MP/libraries
+          echo "reference assemblies: $(ls SR2MP/libraries/*.dll | wc -l)"
+
+      - name: Stamp version
+        run: bash tools/set-version.sh "$VERSION"
+
+      - name: Restore
+        run: dotnet restore SR2MP/SR2MP.csproj
+
+      - name: Build release
+        run: dotnet build SR2MP/SR2MP.csproj -c Release --no-restore -o out/release
+
+      - name: Build deeplog
+        if: inputs.deeplog
+        run: dotnet build SR2MP/SR2MP.csproj -c Release -p:DeepLog=true --no-restore -o out/deeplog
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          package() {
+            local build_dir="$1" name="$2" stage
+            stage="$(mktemp -d)"
+            mkdir -p "$stage/Mods"
+            cp "$build_dir/SR2MP.dll" "$stage/Mods/"
+            cp LICENSE NOTICE.md README.md "$stage/"
+            (cd "$stage" && zip -q -r -9 "$GITHUB_WORKSPACE/dist/$name.zip" .)
+          }
+          package out/release "Lycoreia-$VERSION"
+          if [[ -d out/deeplog ]]; then
+            package out/deeplog "Lycoreia-$VERSION-deeplog"
+          fi
+          (cd dist && sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Write release notes
+        env:
+          NOTES: ${{ inputs.notes }}
+        run: |
+          {
+            if [[ -n "$NOTES" ]]; then printf '%s\n\n' "$NOTES"; fi
+            echo "**All players must use the same version ($VERSION).**"
+            echo
+            echo "- \`Lycoreia-$VERSION.zip\` — for playing"
+            if [[ -d out/deeplog ]]; then
+              echo "- \`Lycoreia-$VERSION-deeplog.zip\` — writes detailed diagnostics; use it to report bugs"
+            fi
+            echo
+            echo "Install: copy \`Mods/SR2MP.dll\` into the game's \`Mods\` folder (replace any older SR2MP.dll)."
+            echo
+            echo "Checksums: see \`SHA256SUMS.txt\`."
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          flags=()
+          [[ "$PRERELEASE" == "true" ]] && flags+=(--prerelease)
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --generate-notes \
+            "${flags[@]}"

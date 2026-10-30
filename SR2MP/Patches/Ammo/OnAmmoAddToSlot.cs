@@ -23,6 +23,7 @@ namespace SR2MP.Patches.Ammo
                 Identifiable = NetworkActorManager.GetPersistentID(metadata.Id),
                 SlotIndex = slotIdx,
                 Count = count,
+                Radiant = metadata.Radiant,
                 ID = __instance.GetPlotID()
             };
 

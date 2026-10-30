@@ -18,6 +18,14 @@
     <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
 
+  <PropertyGroup Condition=" '$(TestHarness)' == 'true' ">
+    <DefineConstants>$(DefineConstants);SR2MP_TEST</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(DeepLog)' == 'true' ">
+    <DefineConstants>$(DefineConstants);SR2MP_DEEPLOG</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <None Remove="libraries\*" />
     <None Remove="Bundled\*" />

@@ -11,11 +11,7 @@ internal sealed class InitialTeleporterLinksHandler : BasePacketHandler<InitialT
 {
     protected override bool Handle(InitialTeleporterLinksPacket packet, IPEndPoint? _)
     {
-        foreach (var link in packet.Links)
-        {
-            StartCoroutine(NetworkGadgetManager.ApplyTeleporterLink(
-                link.SourceNodeId, link.DestinationNodeId, link.DestinationSceneGroup));
-        }
+        StartCoroutine(NetworkGadgetManager.ApplyTeleporterLinkSnapshot(packet.Links));
 
         return false;
     }

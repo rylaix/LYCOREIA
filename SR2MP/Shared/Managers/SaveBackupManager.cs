@@ -1,3 +1,4 @@
+using SR2MP.Shared.Utils;
 using MelonLoader.Utils;
 
 namespace SR2MP.Shared.Managers;
@@ -30,7 +31,7 @@ internal static class SaveBackupManager
     private static string? currentSave;
 
     internal static string BackupRoot 
-        => Path.Combine(MelonEnvironment.UserDataDirectory, "SR2MP", "SaveBackups");
+        => Path.Combine(ModPaths.DataDirectory, "SaveBackups");
 
     internal static void ResetSession()
     {

@@ -10,8 +10,6 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
 {
     public static MultiplayerUI Instance { get; private set; }
 
-    private bool didUnfocus;
-
     private void Awake()
     {
         firstTime = Main.SetupUI;
@@ -42,7 +40,9 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
     {
         HandleUIToggle();
         HandleChatToggle();
-        HandleChatInput();
+        ProcessPendingMessages();
+        ChatHud.Update(this);
+        DirectLaunch.Pump();
     }
 
     private void OnGUI()
@@ -55,27 +55,24 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
             UpdateChatVisibility();
         }
 
+        if (Event.current.type == EventType.Repaint)
+            DrawWatermark();
+
         previousLayoutRect = new Rect(6, 16, WindowWidth, 0);
         previousLayoutHorizontalIndex = 0;
 
         if (!MenuEUtil.isAnyMenuOpen && !MenuEUtil.isAnyPopUpOpen)
-        {
-            didUnfocus = false;
             DrawWindow();
-            DrawChat();
-        }
-        else if (!didUnfocus)
-        {
-            UnfocusChat();
-            didUnfocus = true;
-        }
     }
+
+    // The native LycoreiaMenu (main/pause menu "Multiplayer") replaces this window; F4 shows it as a fallback.
+    private bool legacyWindowHidden = true;
 
     private void DrawWindow()
     {
-        if (state == MenuState.Hidden) return;
+        if (state == MenuState.Hidden || legacyWindowHidden) return;
 
-        GUI.Box(new Rect(6, 6, WindowWidth, WindowHeight), "SR2MP (F4 to toggle)");
+        GUI.Box(new Rect(6, 6, WindowWidth, WindowHeight), $"{BuildInfo.Name} {BuildInfo.Version} (F4 to toggle)");
 
         switch (state)
         {

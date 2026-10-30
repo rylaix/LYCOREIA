@@ -9,7 +9,7 @@ internal sealed class AccessDoorPacket : IPacket
     public AccessDoor.State State;
 
     public PacketType Type => PacketType.AccessDoor;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

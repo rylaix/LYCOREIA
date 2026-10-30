@@ -11,11 +11,12 @@ internal static class OnTeleporterLinked
 {
     public static void Postfix(TeleporterModel __instance, TeleporterNodeModel nodeModel, SceneGroup sceneGroup)
     {
-        if (!Main.Server.IsRunning && !Main.Client.IsConnected) return;
         if (HandlingPacket) return;
 
         try
         {
+            NetworkGadgetManager.EnsureTeleporterLinkMonitor();
+
             var sourceNode = __instance.source?.TeleporterNodeModel;
             if (sourceNode == null || nodeModel == null) return;
 
@@ -25,6 +26,12 @@ internal static class OnTeleporterLinked
                 SrLogger.LogWarning($"OnTeleporterLinked: {sourceNode.NodeId} has an unroutable destination scene group ({sceneGroupId}).");
                 return;
             }
+
+            NetworkGadgetManager.RecordTeleporterLink(
+                sourceNode.NodeId, nodeModel.NodeId, (byte)sceneGroupId);
+
+            if (!Main.Server.IsRunning && !Main.Client.IsConnected)
+                return;
 
             SrLogger.LogDebug($"OnTeleporterLinked: broadcasting {sourceNode.NodeId} -> {nodeModel.NodeId}.");
 

@@ -10,6 +10,7 @@ internal sealed class GardenUpdatePacket : IPacket
         public double NextSpawnTime;
         public float StoredWater;
         public bool NextSpawnRipens;
+        public long Revision;
 
         public readonly void Serialise(PacketWriter writer)
         {
@@ -17,6 +18,7 @@ internal sealed class GardenUpdatePacket : IPacket
             writer.WriteDouble(NextSpawnTime);
             writer.WriteFloat(StoredWater);
             writer.WriteBool(NextSpawnRipens);
+            writer.WriteLong(Revision);
         }
 
         public void Deserialise(PacketReader reader)
@@ -25,13 +27,16 @@ internal sealed class GardenUpdatePacket : IPacket
             NextSpawnTime = reader.ReadDouble();
             StoredWater = reader.ReadFloat();
             NextSpawnRipens = reader.ReadBool();
+            Revision = reader.ReadLong();
         }
     }
 
     public List<Entry> Entries;
 
     public PacketType Type => PacketType.GardenUpdate;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    // Preserve delta order per sender. Revisions arbitrate these with snapshots, whose packet
+    // type has its own independent sequence stream.
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.Landplots;
 
     public void Serialise(PacketWriter writer)

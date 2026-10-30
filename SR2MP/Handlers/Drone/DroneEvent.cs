@@ -11,8 +11,30 @@ namespace SR2MP.Handlers.Drone;
 [PacketHandler((byte)PacketType.DroneEvent)]
 internal sealed class DroneEventHandler : BasePacketHandler<DroneEventPacket>
 {
-    protected override bool Handle(DroneEventPacket packet, IPEndPoint? _)
+    protected override bool Handle(DroneEventPacket packet, IPEndPoint? clientEndpoint)
     {
+        if (Main.Server.IsRunning)
+        {
+            if (!RequireAuthenticatedClient(clientEndpoint) || clientEndpoint == null ||
+                !Main.Server.ClientManager.TryGetClient(clientEndpoint, out var sender) || sender == null)
+                return false;
+
+            var currentOwnerId = NetworkDroneManager.TryGetCurrentOwner(packet.StationId, out var ownerId)
+                ? ownerId
+                : string.Empty;
+            if (packet.StationId == 0 || !DroneMutationPolicy.CanAcceptOwnedMutation(
+                    serverSide: true,
+                    endpointAuthenticated: true,
+                    senderId: sender.PlayerId,
+                    currentOwnerId: currentOwnerId))
+            {
+                SrLogger.LogWarning(
+                    $"Rejected DroneEvent for station {packet.StationId} from non-owner '{sender.PlayerId}' " +
+                    $"(current owner '{currentOwnerId}').");
+                return false;
+            }
+        }
+
         if (!ActorManager.ActorTypes.TryGetValue(packet.TypeId, out var type) || type == null)
             return true;
 

@@ -1,6 +1,6 @@
 using HarmonyLib;
 using Il2CppMonomiPark.SlimeRancher.DataModel;
-using SR2MP.Packets.Upgrade;
+using SR2MP.Shared.Managers;
 
 namespace SR2MP.Patches.Player;
 
@@ -9,12 +9,10 @@ internal static class OnPlayerUpgraded
 {
     public static void Postfix(UpgradeDefinition definition)
     {
-        if (HandlingPacket) return;
+        if (HandlingPacket || NetworkUpgradeManager.ExecutingHostPurchase || !Main.Server.IsRunning)
+            return;
 
-        if (!Main.Server.IsRunning && !Main.Client.IsConnected) return;
-
-        var packet = new PlayerUpgradePacket { UpgradeID = (byte)definition._uniqueId };
-
-        Main.SendToAllOrServer(packet);
+        var level = SceneContext.Instance.PlayerState._model.upgradeModel.GetUpgradeLevel(definition);
+        NetworkUpgradeManager.BroadcastHostUpgrade((byte)definition._uniqueId, (sbyte)level);
     }
 }

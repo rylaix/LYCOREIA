@@ -6,6 +6,7 @@ using Il2CppMonomiPark.SlimeRancher.Regions;
 using Il2CppMonomiPark.SlimeRancher.Slime;
 using JetBrains.Annotations;
 using SR2MP.Packets.Actor;
+using SR2MP.Shared.Managers;
 using SR2MP.Shared.Utils;
 using Starlight.Storage;
 using Delegate = Il2CppSystem.Delegate;
@@ -27,10 +28,16 @@ internal sealed partial class NetworkActor : MonoBehaviour
     public bool  ShouldUpdateResourceState;
     public bool  IsValid = true;
     public bool  IsDestroyed;
+    // Scene transitions destroy and recreate actor GameObjects from the persistent
+    // world model. That cleanup must not be broadcast as real actor destruction.
+    internal bool SuppressDestroyPacket;
     public byte  AttemptedGetIdentifiable;
     public bool  CachedLocallyOwned;
 
     public string CurrentOwnerId = string.Empty;
+
+    /// <summary>Ownership epoch of this actor (mirrors ActorManager.EpochByActorId; host-issued).</summary>
+    internal uint Epoch => ActorManager.GetEpoch(ActorId.Value);
 
     private float lastOwnerHeardTime;
     private float ownerSilenceThreshold;
@@ -51,6 +58,9 @@ internal sealed partial class NetworkActor : MonoBehaviour
     private bool? cachedCycleReleasing;
 
     private Vector3 savedVelocity;
+    private bool localVacuumPrediction;
+
+    internal bool IsLocalVacuumPrediction => localVacuumPrediction;
 
     internal bool isSlime;
     internal bool isResource;
@@ -200,20 +210,29 @@ internal sealed partial class NetworkActor : MonoBehaviour
             if (actorId.Value == 0)
                 yield break;
 
-            LocallyOwned = !hibernating;
-
             if (hibernating)
+            {
+                var releasedOwned = LocallyOwned;
+                LocallyOwned = false;
+                if (releasedOwned && Main.Server.IsRunning)
+                {
+                    // The host's own release never passes through the unload handler, so record it here.
+                    NetworkActorManager.MarkReleasedByOwner(actorId.Value, LocalID);
+                    OwnershipArbiter.EvaluateNow(actorId.Value);
+                }
                 Main.SendToAllOrServer(new ActorUnloadPacket
                 {
                     ActorId  = actorId,
                     SenderId = LocalID
                 });
+            }
             else
-                Main.SendToAllOrServer(new ActorTransferPacket
-                {
-                    ActorId = actorId,
-                    OwnerId = LocalID
-                });
+            {
+                // Waking never claims. Keep the current owner's view and tell the host we are interested; the
+                // arbiter decides and the normal ownership broadcast updates LocallyOwned.
+                LocallyOwned = CurrentOwnerId == LocalID;
+                NetworkActorManager.ExpressOwnershipInterest(actorId, CurrentOwnerId, force: true);
+            }
         }
         catch (Exception ex)
         {
@@ -256,6 +275,7 @@ internal sealed partial class NetworkActor : MonoBehaviour
             HandleCycleReleasing();
 
             UpdateInterpolation();
+            TraceVisibilityTransition();
 
             SyncTimer -= UnityEngine.Time.unscaledDeltaTime;
 
@@ -267,6 +287,14 @@ internal sealed partial class NetworkActor : MonoBehaviour
             if (LocallyOwned)
             {
                 SendStateUpdate();
+                SendWorldUpdate();
+            }
+            else if (IsLocalVacuumPrediction &&
+                     NetworkActorCaptureManager.ShouldReplicateApprovedConsumePull(ActorId.Value))
+            {
+                // Native suction is predicted on the guest for a host-owned
+                // actor. Publish that motion while the host-approved consume is
+                // pending so observers do not see a stationary object vanish.
                 SendWorldUpdate();
             }
         }
@@ -281,6 +309,9 @@ internal sealed partial class NetworkActor : MonoBehaviour
     {
         if (CachedLocallyOwned != LocallyOwned)
         {
+            if (LocallyOwned)
+                localVacuumPrediction = false;
+
             SetRigidbodyState(LocallyOwned);
             ApplyLabyrinthSimulationGate();
 
@@ -303,7 +334,7 @@ internal sealed partial class NetworkActor : MonoBehaviour
 
         try
         {
-            rigidbody.constraints = locallyOwned
+            rigidbody.constraints = locallyOwned || localVacuumPrediction
                 ? RigidbodyConstraints.None
                 : RigidbodyConstraints.FreezeAll;
         }
@@ -313,28 +344,75 @@ internal sealed partial class NetworkActor : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Lets the local player's vanilla vacuum physics pull a visible remote-owned
+    /// actor while the host still owns and replicates its authoritative state. The
+    /// override ends as soon as the vacuum stops targeting this actor; a native
+    /// capture/consume then uses the existing host-approved ownership transaction.
+    /// </summary>
+    internal void SetLocalVacuumPrediction(bool active)
+    {
+        if (active && (LocallyOwned || IsDestroyed || !IsValid))
+            active = false;
+
+        if (localVacuumPrediction == active)
+            return;
+
+        localVacuumPrediction = active;
+        SetRigidbodyState(LocallyOwned);
+        var diagnosticActorId = ActorId;
+        Logger.LogDiagnostic("vacuum", active ? "prediction-started" : "prediction-stopped",
+            $"actorId={diagnosticActorId.Value:X}; actor={gameObject.name}; owner={CurrentOwnerId}; " +
+            $"position={transform.position}; velocity={(rigidbody ? rigidbody.velocity : Vector3.zero)}; " +
+            $"bodyKinematic={(rigidbody ? rigidbody.isKinematic : true)}");
+
+#if SR2MP_TEST
+        if (Environment.GetEnvironmentVariable("SR2MP_TEST_TRACE_ACTORS") == "1")
+        {
+            var actorId = ActorId;
+            SrLogger.LogMessage(
+                $"[SR2MP_TEST] actor-local-vacuum-prediction actor={actorId.Value:X} " +
+                $"active={localVacuumPrediction} owner={CurrentOwnerId} position={transform.position}");
+        }
+#endif
+    }
+
     [UsedImplicitly]
     public void OnDestroy()
     {
+        // ActorId returns zero once IsDestroyed is true, so preserve the ID
+        // before marking this component as destroyed. Scene-transition cleanup
+        // already suppresses packet sending and does not need to resolve it.
+        var actorId = SuppressDestroyPacket ? default : ActorId;
         IsDestroyed = true;
         IsValid     = false;
 
         ResetLabyrinthToVanilla();
 
-        if (LocallyOwned)
+        if (SuppressDestroyPacket)
+            return;
+
+        var locallyOwnedById = string.Equals(CurrentOwnerId, LocalID, StringComparison.Ordinal);
+        if (!locallyOwnedById && actorId.Value != 0 &&
+            ActorManager.OwnershipByActorId.TryGetValue(actorId.Value, out var cachedOwnerId))
+            locallyOwnedById = string.Equals(cachedOwnerId, LocalID, StringComparison.Ordinal);
+
+        if (locallyOwnedById)
         {
             if (SystemContext.Instance != null && SystemContext.Instance.SceneLoader != null && SystemContext.Instance.SceneLoader.IsSceneLoadInProgress)
                 return;
 
             try
             {
-                if (ActorId.Value != 0)
+                if (actorId.Value != 0)
                 {
-                    ActorManager.Actors.Remove(ActorId.Value);
+                    ActorManager.Actors.Remove(actorId.Value);
+                    ActorManager.OwnershipByActorId.Remove(actorId.Value);
+                    ActorManager.EpochByActorId.Remove(actorId.Value);
 
                     if (Main.Server.IsRunning || Main.Client.IsConnected)
                     {
-                        var packet = new ActorDestroyPacket { ActorId = ActorId };
+                        var packet = new ActorDestroyPacket { ActorId = actorId, OwnerId = LocalID };
                         Main.SendToAllOrServer(packet);
                     }
                 }

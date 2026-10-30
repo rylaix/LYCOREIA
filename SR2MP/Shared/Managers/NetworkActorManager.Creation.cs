@@ -221,7 +221,8 @@ internal sealed partial class NetworkActorManager
                     Count = slot.Count,
                     MaxCount = slot.MaxCount,
                     Identifiable = GetPersistentID(slot._id),
-                    SlotDefinition = NetworkAmmoManager.GetId(slot.Definition)
+                    SlotDefinition = NetworkAmmoManager.GetId(slot.Definition),
+                    Radiant = slot.Radiant
                 };
             }
         }

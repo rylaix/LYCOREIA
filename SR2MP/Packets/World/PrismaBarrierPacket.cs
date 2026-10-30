@@ -8,7 +8,7 @@ internal sealed class PrismaBarrierPacket : IPacket
     public double ActivationTime;
 
     public PacketType Type => PacketType.PrismaBarrier;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

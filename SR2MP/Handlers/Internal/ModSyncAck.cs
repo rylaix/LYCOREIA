@@ -1,5 +1,4 @@
 ﻿using System.Net;
-using Il2CppMonomiPark.SlimeRancher.Economy;
 using SR2MP.Api;
 using SR2MP.Packets.Internal;
 using SR2MP.Packets.Loading;
@@ -13,6 +12,7 @@ internal sealed class ModSyncAckHandler : BasePacketHandler<ModSyncPacket>
 {
     protected override bool Handle(ModSyncPacket packet, IPEndPoint? clientEp)
     {
+        ReSyncManager.TraceJoinSync("mod-sync-ack-enter", packet.PlayerId);
         var clientNeeds = new List<string>();
         var hostNeeds = new List<string>();
 
@@ -20,12 +20,19 @@ internal sealed class ModSyncAckHandler : BasePacketHandler<ModSyncPacket>
         {
             if (!ApiHandlers.Holders.ContainsKey(id))
                 hostNeeds.Add($"{data.Name} ({data.Version})");
+            else if (data.Name == BuildInfo.Name &&
+                     ApiHandlers.Holders[id].Mod.Info.Name == BuildInfo.Name &&
+                     !string.Equals(data.Version, ApiHandlers.Holders[id].Mod.Info.Version, StringComparison.Ordinal))
+                hostNeeds.Add($"{data.Name} has incompatible network version {data.Version}");
         }
 
         foreach (var (id, holder) in ApiHandlers.Holders)
         {
             if (!packet.Mods.ContainsKey(id))
                 clientNeeds.Add($"{holder.Mod.Info.Name} ({holder.Mod.Info.Version})");
+            else if (holder.Mod.Info.Name == BuildInfo.Name &&
+                     !string.Equals(packet.Mods[id].Version, holder.Mod.Info.Version, StringComparison.Ordinal))
+                clientNeeds.Add($"{holder.Mod.Info.Name} has incompatible network version {packet.Mods[id].Version}");
         }
 
         if (clientNeeds.Count > 0 || hostNeeds.Count > 0)
@@ -41,6 +48,7 @@ internal sealed class ModSyncAckHandler : BasePacketHandler<ModSyncPacket>
             return false;
         }
 
+        ReSyncManager.TraceJoinSync("mod-sync-ack-mods-verified", packet.PlayerId);
         var netData = new List<ModNetData>();
 
         foreach (var id in ApiHandlers.Holders.Keys)
@@ -52,12 +60,12 @@ internal sealed class ModSyncAckHandler : BasePacketHandler<ModSyncPacket>
             });
         }
 
+        ReSyncManager.TraceJoinSync("mod-sync-ack-refresh-packet-mapping", packet.PlayerId);
         ApiHandlers.RefreshPacketMapping();
-
-        var money = SceneContext.Instance.PlayerState.GetCurrency(
-            GameContext.Instance.LookupDirector._currencyList[0].Cast<ICurrency>());
-        var rainbowMoney = SceneContext.Instance.PlayerState.GetCurrency(
-            GameContext.Instance.LookupDirector._currencyList[1].Cast<ICurrency>());
+        ReSyncManager.TraceJoinSync("mod-sync-ack-currency-capture", packet.PlayerId);
+        var currencyBalances = ConnectionApprovePacket.CaptureCurrencyBalances();
+        ReSyncManager.TraceJoinSync($"mod-sync-ack-currency-captured count={currencyBalances.Count}", packet.PlayerId);
+        var syncId = ReSyncManager.CreateSyncId();
 
         var ackPacket = new ConnectionApprovePacket
         {
@@ -65,19 +73,24 @@ internal sealed class ModSyncAckHandler : BasePacketHandler<ModSyncPacket>
             PlayerId = packet.PlayerId,
             OtherPlayers = Array.ConvertAll(PlayerManager.GetAllPlayers().ToArray(),
                 p => (p.PlayerId, p.Username)),
-            Money = money,
-            RainbowMoney = rainbowMoney,
+            CurrencyBalances = currencyBalances,
+            CurrencyRevisions = ConnectionApprovePacket.CaptureCurrencyRevisions(currencyBalances.Keys),
             AllowCheats = Main.AllowCheats,
-            NetData = netData
+            NetData = netData,
+            SyncId = syncId,
+            HostSessionId = Main.Server.PlayerId
         };
 
         // The connectAck is different because of initialJoin, otherwise another PlayerJoin request will be sent
 
+        ReSyncManager.TraceJoinSync("mod-sync-ack-approve-send", packet.PlayerId);
         Main.Server.SendToClient(ackPacket, clientEp!);
-        
+        ReSyncManager.TraceJoinSync("mod-sync-ack-actor-types", packet.PlayerId);
         ActorManager.SendActorTypeRegistry(clientEp!);
 
-        ReSyncManager.SynchronizeClient(packet.PlayerId, clientEp!);
+        ReSyncManager.TraceJoinSync("mod-sync-ack-synchronize-client", packet.PlayerId);
+        ReSyncManager.SynchronizeClient(packet.PlayerId, clientEp!, syncId);
+        ReSyncManager.TraceJoinSync("mod-sync-ack-complete", packet.PlayerId);
 
         SrLogger.LogMessage(
             $"Player {packet.PlayerId} successfully connected",

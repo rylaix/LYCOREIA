@@ -25,7 +25,7 @@ internal sealed class InitialGadgetLinksPacket : IPacket
     public List<Link> Links;
 
     public PacketType Type => PacketType.InitialGadgetLinks;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer) => writer.WriteList(Links, PacketWriterDels.NetObject<Link>.Writer);

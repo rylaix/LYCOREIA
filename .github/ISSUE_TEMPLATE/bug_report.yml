@@ -1,0 +1,90 @@
+name: Bug report
+description: Something desynced, broke or crashed in co-op
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Co-op bugs almost always need logs from **both** players.
+        Please use the `-deeplog` package while reproducing.
+
+        > **Privacy:** logs can contain IP addresses and player IDs. Before attaching, search them for
+        > your public IP address and replace it with `x.x.x.x` if you do not want it published.
+
+  - type: input
+    id: version
+    attributes:
+      label: Lycoreia version
+      description: Shown in the game's mod list (both players must match)
+      placeholder: 1.0.0-rc.1
+    validations:
+      required: true
+
+  - type: input
+    id: game
+    attributes:
+      label: Game / MelonLoader / Starlight versions
+      placeholder: SR2 1.3.0, MelonLoader 0.7.3, Starlight 4.0.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: role
+    attributes:
+      label: Who saw the problem?
+      options: [Host, Guest, Both]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Slimes / items / ownership
+        - Vacuum / throwing
+        - Ranch (things disappearing)
+        - Treasure pods / unlocks
+        - Shop / market / plorts
+        - Build inventory / gadgets
+        - Gardens
+        - Tarr
+        - Performance / freeze
+        - Connection
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: Host opened a treasure pod near the guest; the guest still saw it closed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Host loads save, guest joins
+        2. Both go to ...
+        3. ...
+
+  - type: input
+    id: when
+    attributes:
+      label: Approximate time it happened (with time zone)
+      description: Helps find the moment in the logs
+      placeholder: 23:21 CET
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs from both players
+      description: |
+        From `<game>/UserData/Lycoreia/` on each PC: `latest.log` and `diagnostics.jsonl*`.
+        Zip them per player (`host.zip`, `guest.zip`) and drag them here.
+    validations:
+      required: true

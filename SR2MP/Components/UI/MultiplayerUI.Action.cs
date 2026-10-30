@@ -143,72 +143,19 @@ internal sealed partial class MultiplayerUI
 
     internal void HandleUIToggle(bool hide = false)
     {
-        if (KeyCode.F4.OnKeyDown() && !isChatFocused)
-            multiplayerUIHidden = !multiplayerUIHidden;
+        if (KeyCode.F4.OnKeyDown() && !ChatHud.IsOpen)
+            legacyWindowHidden = !legacyWindowHidden;
 
-        if (hide && !isChatFocused)
-            multiplayerUIHidden = !multiplayerUIHidden;
+        if (hide && !ChatHud.IsOpen)
+            legacyWindowHidden = !legacyWindowHidden;
     }
 
     internal void HandleChatToggle(bool hide = false)
     {
         if (!KeyCode.F5.OnKeyDown() && !hide) return;
 
-        if (isChatFocused)
-            UnfocusChat();
-
         chatHidden = !chatHidden;
         internalChatToggle = true;
-
-        if (chatHidden && disabledInput)
-        {
-            EnableInput();
-            disabledInput = false;
-        }
-    }
-
-    private void HandleChatInput()
-    {
-        if (chatHidden || state == MenuState.DisconnectedMainMenu)
-            return;
-
-        if (justUnfocusedInput)
-        {
-            justUnfocusedInput = false;
-            return;
-        }
-
-        var enterPressed = KeyCode.Return.OnKeyDown() || KeyCode.KeypadEnter.OnKeyDown();
-        var escapePressed = KeyCode.Escape.OnKeyDown();
-
-        if (!string.IsNullOrEmpty(activeInputId) && activeInputId != "chat_input")
-            return;
-
-        if (!isChatFocused && enterPressed)
-        {
-            FocusChat();
-            activeInputId = "chat_input";
-            return;
-        }
-
-        if (!isChatFocused)
-            return;
-
-        if (enterPressed)
-        {
-            if (!string.IsNullOrWhiteSpace(chatInput))
-                SendChatMessage(chatInput.Trim());
-
-            ClearChatInput();
-            UnfocusChat();
-            activeInputId = string.Empty;
-        }
-        else if (escapePressed)
-        {
-            ClearChatInput();
-            UnfocusChat();
-            activeInputId = string.Empty;
-        }
     }
 
     private void AdjustInputValues()

@@ -12,7 +12,7 @@ internal sealed class UpgradeComponentPacket : IPacket
     public byte Count;
 
     public PacketType Type => PacketType.ComponentAdd;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.Ammo;
 
     public void Serialise(PacketWriter writer)
@@ -25,5 +25,21 @@ internal sealed class UpgradeComponentPacket : IPacket
     {
         ComponentId = reader.ReadPooledString()!;
         Count = reader.ReadByte();
+    }
+
+    internal static bool VerifySerializationRoundTrip()
+    {
+        var expected = new UpgradeComponentPacket { ComponentId = "drone-core", Count = 7 };
+
+        using var writer = PacketWriter.Borrow();
+        expected.Serialise(writer);
+        var bytes = writer.ToSpan().ToArray();
+
+        using var reader = PacketReader.Borrow(bytes);
+        var actual = new UpgradeComponentPacket();
+        actual.Deserialise(reader);
+
+        return reader.BytesRemaining == 0 && actual.ComponentId == expected.ComponentId &&
+               actual.Count == expected.Count;
     }
 }

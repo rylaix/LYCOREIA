@@ -54,7 +54,10 @@ internal sealed class NetworkResourceNodeManager
         nodePlacements.Clear();
 
         foreach (var node in nodes)
-            nodePlacements[node.ID] = node;
+        {
+            if (node != null && ResourceNodeSyncPolicy.IsValidNodeId(node.ID))
+                nodePlacements[node.ID] = node;
+        }
 
         EnsureLoopStarted();
         ApplyRemotePlacements();
@@ -62,6 +65,9 @@ internal sealed class NetworkResourceNodeManager
 
     internal void ApplyPlacement(ResourceNodePlacement placement)
     {
+        if (placement == null || !ResourceNodeSyncPolicy.IsValidNodeId(placement.ID))
+            return;
+
         nodePlacements[placement.ID] = placement;
 
         EnsureLoopStarted();
@@ -70,6 +76,9 @@ internal sealed class NetworkResourceNodeManager
 
     internal void ApplyState(string nodeId, ResourceNode.NodeState state)
     {
+        if (!ResourceNodeSyncPolicy.IsValidNodeId(nodeId))
+            return;
+
         if (state == ResourceNode.NodeState.HARVESTING)
             RemotelyHarvested.Add(nodeId);
         else
@@ -85,6 +94,7 @@ internal sealed class NetworkResourceNodeManager
             return;
         }
 
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
         try
         {
@@ -96,7 +106,7 @@ internal sealed class NetworkResourceNodeManager
         }
         finally
         {
-            HandlingPacket = false;
+            HandlingPacket = wasHandlingPacket;
         }
     }
     
@@ -154,6 +164,7 @@ internal sealed class NetworkResourceNodeManager
 
             var spawner = GetSpawner(placement.ID);
 
+            var wasHandlingPacket = HandlingPacket;
             HandlingPacket = true;
             try
             {
@@ -209,7 +220,7 @@ internal sealed class NetworkResourceNodeManager
             }
             finally
             {
-                HandlingPacket = false;
+                HandlingPacket = wasHandlingPacket;
             }
         }
         catch (Exception ex)
@@ -249,6 +260,7 @@ internal sealed class NetworkResourceNodeManager
 
             var applied = false;
 
+            var wasHandlingPacket = HandlingPacket;
             HandlingPacket = true;
             try
             {
@@ -258,7 +270,7 @@ internal sealed class NetworkResourceNodeManager
             catch { /* ignored */ }
             finally
             {
-                HandlingPacket = false;
+                HandlingPacket = wasHandlingPacket;
             }
 
             if (applied)

@@ -27,6 +27,9 @@ internal sealed partial class NetworkDrone : MonoBehaviour
     private long stationId;
     private bool registered;
     private bool pendingInitialClaim;
+    private bool pendingClaim;
+    private string pendingClaimPreviousOwnerId = string.Empty;
+    private float nextClaimRetryAt;
     private bool cachedLocallyOwned;
     private float syncTimer = Timers.ActorTimer;
 
@@ -110,6 +113,7 @@ internal sealed partial class NetworkDrone : MonoBehaviour
             CurrentOwnerId = knownOwner;
             LocallyOwned = knownOwner == LocalID;
             pendingInitialClaim = false;
+            pendingClaim = false;
         }
         else if (NetworkDroneManager.CachedOwners.TryGetValue(StationId, out var cachedOwner) &&
                  !string.IsNullOrEmpty(cachedOwner))
@@ -117,6 +121,7 @@ internal sealed partial class NetworkDrone : MonoBehaviour
             CurrentOwnerId = cachedOwner;
             LocallyOwned = cachedOwner == LocalID;
             pendingInitialClaim = false;
+            pendingClaim = false;
         }
         else if (pendingInitialClaim)
         {
@@ -173,7 +178,12 @@ internal sealed partial class NetworkDrone : MonoBehaviour
         }
         else
         {
-            ClaimOwnership();
+            if (!Main.Server.IsRunning ||
+                string.IsNullOrEmpty(CurrentOwnerId) ||
+                string.Equals(CurrentOwnerId, LocalID, StringComparison.Ordinal) ||
+                !PlayerManager.CheckPlayerExists(CurrentOwnerId) ||
+                NetworkDroneManager.IsExplicitlyReleasedOwner(StationId, CurrentOwnerId))
+                ClaimOwnership();
         }
     }
 
@@ -181,6 +191,19 @@ internal sealed partial class NetworkDrone : MonoBehaviour
     {
         if (!Main.Server.IsRunning && !Main.Client.IsConnected && !LocallyOwned)
             LocallyOwned = true;
+
+        if (pendingClaim && Main.Client.IsConnected && !Main.Server.IsRunning)
+        {
+            if (UnityEngine.Time.unscaledTime >= nextClaimRetryAt)
+            {
+                nextClaimRetryAt = UnityEngine.Time.unscaledTime + 1f;
+                SendOwnershipPacket(LocalID, pendingClaimPreviousOwnerId);
+            }
+
+            // A client remains a replica until the host acknowledges the claim.
+            if (LocallyOwned)
+                LocallyOwned = false;
+        }
 
         if (!registered)
         {
@@ -230,12 +253,51 @@ internal sealed partial class NetworkDrone : MonoBehaviour
         if (DevMode)
             SrLogger.LogMessage($"Drone {StationId}: claiming ownership (was '{CurrentOwnerId}')");
 
+        if (Main.Client.IsConnected && !Main.Server.IsRunning)
+        {
+            if (pendingClaim)
+                return;
+
+            pendingClaimPreviousOwnerId = CurrentOwnerId ?? string.Empty;
+            pendingClaim = true;
+            nextClaimRetryAt = UnityEngine.Time.unscaledTime + 1f;
+            LocallyOwned = false;
+            SendOwnershipPacket(LocalID, pendingClaimPreviousOwnerId);
+            return;
+        }
+
         LocallyOwned = true;
         CachedOwnerID = CurrentOwnerId;
         CurrentOwnerId = LocalID;
         NetworkDroneManager.CachedOwners[StationId] = LocalID;
+        NetworkDroneManager.PendingOwners.Remove(StationId);
+        NetworkDroneManager.ClearExplicitOwnerRelease(StationId);
         SendOwnershipPacket(LocalID, CachedOwnerID);
         SendUpdate(true);
+    }
+
+    internal void ApplyServerOwnerState(string ownerId)
+    {
+        var wasLocallyOwned = LocallyOwned;
+        CurrentOwnerId = ownerId ?? string.Empty;
+        CachedOwnerID = CurrentOwnerId;
+        LocallyOwned = CurrentOwnerId == LocalID;
+        pendingClaim = false;
+        pendingClaimPreviousOwnerId = string.Empty;
+        NetworkDroneManager.CachedOwners[StationId] = CurrentOwnerId;
+        NetworkDroneManager.PendingOwners.Remove(StationId);
+
+        if (LocallyOwned && !wasLocallyOwned)
+        {
+            syncTimer = 0f;
+            SendUpdate(true);
+        }
+    }
+
+    internal void CancelPendingOwnerClaim()
+    {
+        pendingClaim = false;
+        pendingClaimPreviousOwnerId = string.Empty;
     }
 
     private void SendOwnershipPacket(string claimerId, string previousOwnerId)
@@ -245,6 +307,9 @@ internal sealed partial class NetworkDrone : MonoBehaviour
         
         if (!Main.Server.IsRunning && !Main.Client.IsConnected)
             return;
+
+        if (Main.Server.IsRunning && string.IsNullOrEmpty(claimerId))
+            NetworkDroneManager.RecordExplicitOwnerRelease(StationId, previousOwnerId);
 
         Main.SendToAllOrServer(new DroneOwnershipPacket
         {

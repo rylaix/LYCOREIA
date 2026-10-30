@@ -24,6 +24,15 @@ internal static class OnGordoSlimeProximity
         var id = NetworkGordoSlimeManager.ResolveGordoSlimeId(model);
         if (string.IsNullOrEmpty(id)) return;
 
-        Main.SendToAllOrServer(new GordoSlimeSeenPacket { ID = id });
+        if (!model.identifiableType)
+            return;
+
+        Main.SendToAllOrServer(new GordoSlimeSeenPacket
+        {
+            ID = id,
+            EatenCount = Math.Max(0, model.GordoEatenCount),
+            RequiredFoodCount = model.targetCount,
+            GordoSlimeType = NetworkActorManager.GetPersistentID(model.identifiableType)
+        });
     }
 }

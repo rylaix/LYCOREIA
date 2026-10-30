@@ -8,8 +8,11 @@ namespace SR2MP.Handlers.Player;
 [PacketHandler((byte)PacketType.PlayerGadgetUpdate)]
 internal sealed class PlayerGadgetUpdate : BasePacketHandler<PlayerGadgetUpdatePacket>
 {
-    protected override bool Handle(PlayerGadgetUpdatePacket packet, IPEndPoint? _)
+    protected override bool Handle(PlayerGadgetUpdatePacket packet, IPEndPoint? clientEp)
     {
+        if (IsServerSide && !RequireAuthenticatedPlayer(clientEp, packet.PlayerId))
+            return false;
+
         if (packet.Enabled)
         {
             PlayerManager.UpdatePlayerGadget(

@@ -58,6 +58,10 @@ internal sealed class InitialLandPlotsPacket : IPacket
         public double NextSpawnTime;
         public float StoredWater;
         public bool NextSpawnRipens;
+        public string GardenId;
+        public string OwnerId;
+        public long Revision;
+        public bool HasState;
 
         public readonly void Serialise(PacketWriter writer)
         {
@@ -65,6 +69,10 @@ internal sealed class InitialLandPlotsPacket : IPacket
             writer.WriteDouble(NextSpawnTime);
             writer.WriteFloat(StoredWater);
             writer.WriteBool(NextSpawnRipens);
+            writer.WriteString(GardenId);
+            writer.WriteString(OwnerId ?? string.Empty);
+            writer.WriteLong(Revision);
+            writer.WriteBool(HasState);
         }
 
         public void Deserialise(PacketReader reader)
@@ -73,6 +81,10 @@ internal sealed class InitialLandPlotsPacket : IPacket
             NextSpawnTime = reader.ReadDouble();
             StoredWater = reader.ReadFloat();
             NextSpawnRipens = reader.ReadBool();
+            GardenId = reader.ReadPooledString()!;
+            OwnerId = reader.ReadPooledString() ?? string.Empty;
+            Revision = reader.ReadLong();
+            HasState = reader.ReadBool();
         }
     }
 
@@ -161,7 +173,7 @@ internal sealed class InitialLandPlotsPacket : IPacket
     public List<BasePlot> LandPlots;
 
     public PacketType Type => PacketType.InitialLandPlots;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.Landplots;
 
     public void Serialise(PacketWriter writer) => writer.WriteList(LandPlots, PacketWriterDels.NetObject<BasePlot>.Writer);

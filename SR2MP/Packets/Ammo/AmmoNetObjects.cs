@@ -42,6 +42,7 @@ internal struct NetworkAmmoSlot : INetObject
     public int Count;
     public int MaxCount;
     public ushort SlotDefinition;
+    public bool Radiant;
 
     public readonly void Serialise(PacketWriter writer)
     {
@@ -49,6 +50,7 @@ internal struct NetworkAmmoSlot : INetObject
         writer.WritePackedInt(Count);
         writer.WritePackedInt(MaxCount);
         writer.WriteUShort(SlotDefinition);
+        writer.WriteBool(Radiant);
     }
 
     public void Deserialise(PacketReader reader)
@@ -57,13 +59,50 @@ internal struct NetworkAmmoSlot : INetObject
         Count = reader.ReadPackedInt();
         MaxCount = reader.ReadPackedInt();
         SlotDefinition = reader.ReadUShort();
+        Radiant = reader.ReadBool();
     }
 
     public readonly AmmoSlot ToGameAmmoSlot() => new()
     {
         _count = Count,
         _id = ActorManager.ActorTypes[Identifiable],
+        Radiant = this.Radiant,
         // _isUnlockedValue = new NullableFloatProperty(1),
         _maxCountValue = new NullableFloatProperty((float)MaxCount),
     };
+
+#if SR2MP_TEST
+    internal static bool VerifyRadiantSerializationRoundTrip()
+    {
+        foreach (var radiant in new[] { false, true })
+        {
+            var expected = new NetworkAmmoSlot
+            {
+                Identifiable = 0x1357,
+                Count = 3,
+                MaxCount = 5,
+                SlotDefinition = 0x6B4,
+                Radiant = radiant
+            };
+
+            using var writer = PacketWriter.Borrow();
+            expected.Serialise(writer);
+            var bytes = writer.ToSpan().ToArray();
+
+            using var reader = PacketReader.Borrow(bytes);
+            var actual = new NetworkAmmoSlot();
+            actual.Deserialise(reader);
+
+            if (actual.Identifiable != expected.Identifiable ||
+                actual.Count != expected.Count ||
+                actual.MaxCount != expected.MaxCount ||
+                actual.SlotDefinition != expected.SlotDefinition ||
+                actual.Radiant != expected.Radiant ||
+                reader.BytesRemaining != 0)
+                return false;
+        }
+
+        return true;
+    }
+#endif
 }

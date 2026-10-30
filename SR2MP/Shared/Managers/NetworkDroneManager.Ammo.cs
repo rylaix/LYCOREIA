@@ -28,7 +28,8 @@ internal static partial class NetworkDroneManager
                 Count = hasItem ? slot.Count : 0,
                 MaxCount = slot.MaxCount,
                 Identifiable = hasItem ? NetworkActorManager.GetPersistentID(slot._id!) : -1,
-                SlotDefinition = NetworkAmmoManager.GetId(slot.Definition)
+                SlotDefinition = NetworkAmmoManager.GetId(slot.Definition),
+                Radiant = hasItem && slot.Radiant
             };
         }
 
@@ -42,7 +43,7 @@ internal static partial class NetworkDroneManager
 
         var hash = 17;
         foreach (var (index, slot) in ammo.AmmoSlots)
-            hash = (hash * 31) + (index * 7) + (slot.Identifiable * 13) + slot.Count;
+            hash = (hash * 31) + (index * 7) + (slot.Identifiable * 13) + slot.Count + (slot.Radiant ? 1 : 0);
 
         return hash;
     }
@@ -69,11 +70,13 @@ internal static partial class NetworkDroneManager
             {
                 slot._id = identType;
                 slot._count = netSlot.Count;
+                slot.Radiant = netSlot.Radiant;
             }
             else
             {
                 slot._id = null;
                 slot._count = 0;
+                slot.Radiant = false;
             }
         }
 

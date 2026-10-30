@@ -13,12 +13,34 @@ internal sealed class InitialSlimePediaLoadHandler : BasePacketHandler<InitialPe
 {
     protected override bool Handle(InitialPediaPacket packet, IPEndPoint? _)
     {
-        var unlocked = packet.Entries.ConvertAll(entry =>
-            GameContext.Instance.AutoSaveDirector._saveReferenceTranslation._pediaEntryLookup[entry]);
+        if (packet.Entries == null)
+            return false;
+
+        var pediaLookup = GameContext.Instance.AutoSaveDirector._saveReferenceTranslation._pediaEntryLookup;
+        var unlocked = new List<PediaEntry>();
+        foreach (var entryId in packet.Entries)
+        {
+            if (string.IsNullOrWhiteSpace(entryId))
+                continue;
+
+            if (pediaLookup.TryGetValue(entryId, out var entry) && entry != null)
+                unlocked.Add(entry);
+        }
 
         var unlockedCpp = new Il2CppReferenceArray<PediaEntry>(unlocked.ToArray());
-        SceneContext.Instance.PediaDirector._pediaModel.unlocked = Enumerable.ToHashSet(
-            unlockedCpp.Cast<CppCollections.IEnumerable<PediaEntry>>());
+        var pediaModel = SceneContext.Instance.PediaDirector._pediaModel;
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
+        {
+            pediaModel.unlocked = Enumerable.ToHashSet(
+                unlockedCpp.Cast<CppCollections.IEnumerable<PediaEntry>>());
+            pediaModel.NotifyParticipants();
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
 
         return false;
     }

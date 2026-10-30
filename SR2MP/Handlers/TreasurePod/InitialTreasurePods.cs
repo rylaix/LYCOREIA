@@ -2,28 +2,21 @@
 using SR2MP.Handlers.Internal;
 using SR2MP.Packets.TreasurePod;
 using SR2MP.Packets.Utils;
+using SR2MP.Shared.Managers;
 
 namespace SR2MP.Handlers.TreasurePod;
 
-[PacketHandler((byte)PacketType.InitialTreasurePods)]
+[PacketHandler((byte)PacketType.InitialTreasurePods, HandlerType.Client)]
 internal sealed class InitialTreasurePodsHandler : BasePacketHandler<InitialTreasurePodsPacket>
 {
     protected override bool Handle(InitialTreasurePodsPacket packet, IPEndPoint? _)
     {
         foreach (var (podId, podState) in packet.TreasurePods)
         {
-            if (!GameState.pods.TryGetValue("pod" + podId, out var model))
-                continue;
-
-            if (podState == Il2Cpp.TreasurePod.State.OPEN)
-            {
-                HandlingPacket = true;
-                model.gameObj?.GetComponent<Il2Cpp.TreasurePod>().Activate();
-                HandlingPacket = false;
-            }
-            model.state = new ObservableValue<Il2Cpp.TreasurePod.State>(podState);
+            packet.RewardsByPod.TryGetValue(podId, out var rewards);
+            NetworkTreasurePodManager.ApplyState(podId, podState, rewards);
         }
 
-        return true;
+        return false;
     }
 }

@@ -26,7 +26,8 @@ internal sealed class NetworkTime : MonoBehaviour
 
         var packet = new WorldTimePacket
         {
-            Time = timeDirector._worldModel.worldTime
+            Time = timeDirector._worldModel.worldTime,
+            Revision = WorldTimePacket.NextRevision()
         };
 
         Main.Server.SendToAll(packet);

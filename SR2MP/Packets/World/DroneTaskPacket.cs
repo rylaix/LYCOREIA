@@ -11,7 +11,7 @@ internal sealed class DroneProgramPacket : IPacket
     public byte Source;
 
     public PacketType Type => PacketType.DroneTask;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

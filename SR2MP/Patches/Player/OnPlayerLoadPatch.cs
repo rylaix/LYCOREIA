@@ -12,15 +12,11 @@ internal static class OnPlayerLoadPatch
     {
         if (Main.Server.IsRunning)
         {
-            var networkPlayer = __instance.AddComponent<NetworkPlayer>();
-            networkPlayer.ID = Main.Server.PlayerId;
-            networkPlayer.IsLocal = true;
+            BindLocalPlayer(__instance, Main.Server.PlayerId);
         }
         else if (Main.Client.IsConnected)
         {
-            var networkPlayer = __instance.AddComponent<NetworkPlayer>();
-            networkPlayer.ID = Main.Client.PlayerId;
-            networkPlayer.IsLocal = true;
+            BindLocalPlayer(__instance, Main.Client.PlayerId);
         }
         else
         {
@@ -29,11 +25,7 @@ internal static class OnPlayerLoadPatch
                 if (!__instance)
                     return;
 
-                var networkPlayer = __instance.AddComponent<NetworkPlayer>();
-                networkPlayer.ID = id;
-                networkPlayer.IsLocal = true;
-
-                PlayerManager.AddPlayer(id).Username = Main.Username;
+                BindLocalPlayer(__instance, id);
             };
 
             Main.Server.OnServerStarted += () =>
@@ -41,12 +33,21 @@ internal static class OnPlayerLoadPatch
                 if (!__instance)
                     return;
 
-                PlayerManager.AddPlayer(Main.Server.PlayerId).Username = Main.Username;
-
-                var networkPlayer = __instance.AddComponent<NetworkPlayer>();
-                networkPlayer.ID = Main.Server.PlayerId;
-                networkPlayer.IsLocal = true;
+                BindLocalPlayer(__instance, Main.Server.PlayerId);
             };
         }
+    }
+
+    private static void BindLocalPlayer(SRCharacterController controller, string playerId)
+    {
+        if (!controller || string.IsNullOrWhiteSpace(playerId))
+            return;
+
+        var networkPlayer = controller.GetComponent<NetworkPlayer>();
+        if (!networkPlayer)
+            networkPlayer = controller.gameObject.AddComponent<NetworkPlayer>();
+
+        networkPlayer.BindLocalIdentity(playerId);
+        PlayerManager.AddPlayer(playerId).Username = Main.Username;
     }
 }

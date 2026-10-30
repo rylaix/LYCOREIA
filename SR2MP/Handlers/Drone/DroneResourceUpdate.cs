@@ -9,24 +9,33 @@ namespace SR2MP.Handlers.Drone;
 [PacketHandler((byte)PacketType.DroneResourceUpdate)]
 internal sealed class DroneResourceUpdateHandler : BasePacketHandler<DroneResourcePacket>
 {
-    protected override bool Handle(DroneResourcePacket packet, IPEndPoint? _)
+    protected override bool Handle(DroneResourcePacket packet, IPEndPoint? clientEndpoint)
     {
-        HandlingPacket = true;
-
-        try
+        if (Main.Server.IsRunning)
         {
-            var store = NetworkSceneManager.GetSceneGroup(packet.Scene)?.DiscoverableResources;
-            if (store == null)
-                return true;
+            var authenticatedPlayerId = clientEndpoint != null &&
+                                        Main.Server.ClientManager.TryGetClient(clientEndpoint, out var sender) &&
+                                        sender != null
+                ? sender.PlayerId
+                : string.Empty;
+            var endpointAuthenticated = !string.IsNullOrWhiteSpace(authenticatedPlayerId);
 
-            var data = NetworkDroneManager.ToResourceData(packet.Entry);
-            store.UpdateResourceData(packet.Index, ref data);
-        }
-        finally
-        {
-            HandlingPacket = false;
+            if (!RequireAuthenticatedClient(clientEndpoint) ||
+                !DroneMutationPolicy.CanAcceptResourceMutation(
+                    serverSide: true,
+                    endpointAuthenticated: endpointAuthenticated,
+                    senderId: authenticatedPlayerId,
+                    stationId: packet.StationId,
+                    ownsExplorerStationInScene: NetworkDroneManager.IsOwnedExplorerStationInScene(
+                        authenticatedPlayerId, packet.StationId, packet.Scene)))
+            {
+                SrLogger.LogWarning(
+                    $"Rejected drone-resource update scene={packet.Scene} index={packet.Index} " +
+                    $"sender='{authenticatedPlayerId}' endpoint={clientEndpoint?.ToString() ?? "<null>"}.");
+                return false;
+            }
         }
 
-        return true;
+        return NetworkDroneManager.ReceiveResourceUpdate(packet);
     }
 }

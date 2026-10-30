@@ -1,11 +1,14 @@
 ﻿using Il2CppMonomiPark.SlimeRancher.DataModel;
+using SR2MP.Packets.Actor;
 using SR2MP.Packets.Utils;
 
 namespace SR2MP.Packets.LandPlots;
 
-internal sealed class ResourceAttachPacket : IPacket
+internal sealed class ResourceAttachPacket : IActorWorldRevisionPacket
 {
     public ActorId ActorId;
+    public long WorldRevision { get; set; }
+    public bool HasWorldRevision { get; set; }
     public string PlotID;
     public int Joint;
     public Vector3 SpawnerID;
@@ -27,6 +30,8 @@ internal sealed class ResourceAttachPacket : IPacket
         writer.WriteFloat(Model.storedWater);
         writer.WritePackedBool(Model.nextSpawnRipens);
         writer.WritePackedBool(Model.wasPreviouslyPlanted);
+        if (HasWorldRevision)
+            writer.WriteLong(WorldRevision);
     }
 
     public void Deserialise(PacketReader reader)
@@ -43,5 +48,11 @@ internal sealed class ResourceAttachPacket : IPacket
             nextSpawnRipens = reader.ReadPackedBool(),
             wasPreviouslyPlanted = reader.ReadPackedBool()
         };
+
+        if (reader.BytesRemaining >= sizeof(long))
+        {
+            WorldRevision = reader.ReadLong();
+            HasWorldRevision = true;
+        }
     }
 }

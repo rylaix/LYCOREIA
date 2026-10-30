@@ -79,21 +79,30 @@ internal static class NetworkPlortDepositorManager
         if (model.AmountDeposited == amountDeposited)
             return;
 
-        model.AmountDeposited = amountDeposited;
-        model.NotifyParticipants();
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
+        {
+            model.AmountDeposited = amountDeposited;
+            model.NotifyParticipants();
 
-        if (!model._gameObject)
-            return;
+            if (!model._gameObject)
+                return;
 
-        var depositor = model._gameObject.GetComponent<PlortDepositor>();
-        if (!depositor)
-            return;
+            var depositor = model._gameObject.GetComponent<PlortDepositor>();
+            if (!depositor)
+                return;
 
-        depositor.OnFilledChangedFromModel();
+            depositor.OnFilledChangedFromModel();
 
-        // the lock only re-evaluates when told to,
-        // it requires an extra invitation
-        depositor._puzLockable?.NotifySlotChanged(false);
+            // the lock only re-evaluates when told to,
+            // it requires an extra invitation
+            depositor._puzLockable?.NotifySlotChanged(false);
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
     }
 
     /// <summary>
@@ -111,16 +120,18 @@ internal static class NetworkPlortDepositorManager
         if (model.AmountDeposited == amountDeposited)
             return;
 
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
         try
         {
             model.AmountDeposited = amountDeposited;
             depositor.OnFilledChangedFromModel();
+            depositor._puzLockable?.NotifySlotChanged(false);
             model.NotifyParticipants();
         }
         finally
         {
-            HandlingPacket = false;
+            HandlingPacket = wasHandlingPacket;
         }
     }
 }

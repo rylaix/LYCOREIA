@@ -1,5 +1,6 @@
-// Memory Access Violation, keep it here
-// The removal is synced from OnGadgetDestroy instead, via NetworkGadgetManager.BroadcastLinkedPairDestroy.
+// Do not Harmony-patch TeleporterModel.RemoveDestination: this target caused a
+// native access violation on the game build. NetworkGadgetManager monitors links
+// recorded by AddDestination and publishes reliable unlink packets after removal.
 /*using HarmonyLib;
 using Il2CppMonomiPark.SlimeRancher.DataModel;
 using SR2MP.Packets.Gadget;

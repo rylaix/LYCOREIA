@@ -1,6 +1,7 @@
 using System.Net;
 using Il2CppMonomiPark.SlimeRancher.DataModel;
 using Il2CppMonomiPark.SlimeRancher.World;
+using SR2MP.Handlers;
 using SR2MP.Handlers.Internal;
 using SR2MP.Packets.Switch;
 using SR2MP.Packets.Utils;
@@ -12,6 +13,10 @@ internal sealed class WorldSwitchHandler : BasePacketHandler<WorldSwitchPacket>
 {
     protected override bool Handle(WorldSwitchPacket packet, IPEndPoint? _)
     {
+        if (!ProgressionPacketInputPolicy.HasIdentifier(packet.ID) ||
+            !ProgressionPacketInputPolicy.IsDefinedEnum(packet.State))
+            return false;
+
         var gameModel = GameState;
 
         if (gameModel.switches.TryGetValue(packet.ID, out var switchModel))
@@ -21,16 +26,25 @@ internal sealed class WorldSwitchHandler : BasePacketHandler<WorldSwitchPacket>
             if (switchModel.gameObj)
             {
                 var switchComponentBase = switchModel.gameObj.GetComponent<WorldSwitchModel.Participant>();
+                if (switchComponentBase == null)
+                    return true;
 
                 var primary = switchComponentBase.TryCast<WorldStatePrimarySwitch>();
                 var secondary = switchComponentBase.TryCast<WorldStateSecondarySwitch>();
                 var invisible = switchComponentBase.TryCast<WorldStateInvisibleSwitch>();
 
+                var wasHandlingPacket = HandlingPacket;
                 HandlingPacket = true;
-                primary?.SetStateForAll(packet.State, packet.Immediate);
-                secondary?.SetState(packet.State, packet.Immediate);
-                invisible?.SetStateForAll(packet.State, packet.Immediate);
-                HandlingPacket = false;
+                try
+                {
+                    primary?.SetStateForAll(packet.State, packet.Immediate);
+                    secondary?.SetState(packet.State, packet.Immediate);
+                    invisible?.SetStateForAll(packet.State, packet.Immediate);
+                }
+                finally
+                {
+                    HandlingPacket = wasHandlingPacket;
+                }
             }
         }
         else

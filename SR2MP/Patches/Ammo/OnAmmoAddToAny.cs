@@ -23,6 +23,7 @@ internal static class OnAmmoAddToAny
         {
             Identifiable = NetworkActorManager.GetPersistentID(metadata.Id),
             Count = 1,
+            Radiant = metadata.Radiant,
             ID = __instance.GetPlotID(),
         };
 

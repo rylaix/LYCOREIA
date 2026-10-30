@@ -142,4 +142,18 @@ internal sealed partial class NetworkDrone
     {
         return ranchDrone != null ? ranchDrone._stationModel : explorerDrone?._stationModel;
     }
+
+    internal bool IsInSceneGroup(int sceneGroupId)
+    {
+        try
+        {
+            var stationModel = GetStationModel();
+            return stationModel != null && stationModel.sceneGroup != null &&
+                   NetworkSceneManager.GetPersistentID(stationModel.sceneGroup) == sceneGroupId;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }

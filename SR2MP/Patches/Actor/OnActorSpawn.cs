@@ -7,6 +7,7 @@ using Il2CppMonomiPark.SlimeRancher.VFX;
 using SR2MP.Components.Actor;
 using SR2MP.Packets.Actor;
 using SR2MP.Shared.Managers;
+using SR2MP.Shared.Utils;
 
 namespace SR2MP.Patches.Actor;
 
@@ -92,6 +93,18 @@ internal static class OnActorSpawn
             }
         }
 
+#if SR2MP_DEEPLOG || SR2MP_TEST
+        ActorDiag.Log("spawn-send", packet.ActorId.Value, "origin=InstantiateActor",
+            packet.ActorType, packet.OwnerId, packet.SceneGroup, packet.Position);
+#endif
+#if SR2MP_TEST
+        if (Environment.GetEnvironmentVariable("SR2MP_TEST_TRACE_ACTORS") == "1")
+            SrLogger.LogMessage(
+                $"[SR2MP_TEST] actor-spawn send origin=InstantiateActor actor={packet.ActorId.Value:X} " +
+                $"type={packet.ActorType} spawnType={packet.SpawnType} owner={packet.OwnerId} " +
+                $"scene={packet.SceneGroup} position={packet.Position}");
+#endif
+
         Main.SendToAllOrServer(packet);
     }
 
@@ -111,8 +124,19 @@ internal static class OnActorSpawn
         if (HandlingPacket) return;
 
         if (!Main.Server.IsRunning && !Main.Client.IsConnected) return;
-        
-        if (NetworkDroneManager.IsDroneModel(__result.GetComponent<IdentifiableActor>()._model)) return;
+
+        if (!__result) return;
+        var identifiableActor = __result.GetComponent<IdentifiableActor>();
+        if (!identifiableActor || identifiableActor._model == null) return;
+
+        var actorModel = identifiableActor._model;
+        if (NetworkDroneManager.IsDroneModel(actorModel)) return;
+
+        if (!ActorManager.CanPublishLocalActorSpawn(actorModel.actorId.Value))
+        {
+            ActorSpawnPublicationPolicy.TraceSuppressed("InstantiateActor", actorModel.actorId.Value);
+            return;
+        }
 
         var networkActor = __result.AddComponent<NetworkActor>();
         networkActor.LocallyOwned = true;
@@ -121,8 +145,10 @@ internal static class OnActorSpawn
         var actorType = NetworkActorManager.GetPersistentID(original.GetComponent<Identifiable>().identType);
         var sceneGroupId = NetworkSceneManager.GetPersistentID(sceneGroup);
 
-        ActorManager.Actors[__result.GetComponent<IdentifiableActor>()._model.actorId.Value] =
-            __result.GetComponent<IdentifiableActor>()._model;
+        ActorManager.Actors[actorModel.actorId.Value] = actorModel;
+        ActorManager.OwnershipByActorId[actorModel.actorId.Value] = LocalID;
+        // A (possibly reused) id starts a fresh epoch history on every peer.
+        ActorManager.EpochByActorId.Remove(actorModel.actorId.Value);
 
         StartCoroutine(SpawnOverNetwork(actorType, (byte)sceneGroupId, __result, appearance, secondAppearance));
     }

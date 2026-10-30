@@ -3,11 +3,109 @@ using Il2CppMonomiPark.SlimeRancher.DataModel;
 using Il2CppMonomiPark.SlimeRancher.Drone;
 using SR2MP.Components.Drone;
 using SR2MP.Packets.Loading;
+using SR2MP.Packets.World;
 
 namespace SR2MP.Shared.Managers;
 
 internal static partial class NetworkDroneManager
 {
+    private static readonly Dictionary<long, DroneProgramPacket> PendingDroneTasks = new();
+    private static bool droneTaskPumpRunning;
+
+    internal static bool ReceiveDroneTask(DroneProgramPacket packet)
+    {
+        PendingDroneTasks[packet.ActorId] = new DroneProgramPacket
+        {
+            ActorId = packet.ActorId,
+            TargetIdent = packet.TargetIdent,
+            Target = packet.Target,
+            Source = packet.Source,
+            Sink = packet.Sink
+        };
+
+        TryApplyPendingDroneTask(packet.ActorId);
+        StartDroneTaskPumpIfNeeded();
+        return true;
+    }
+
+    internal static void ClearPendingSyncState()
+    {
+        PendingDroneTasks.Clear();
+        ClearPendingResourceState();
+    }
+
+    private static bool TryApplyPendingDroneTask(long stationId)
+    {
+        if (!PendingDroneTasks.TryGetValue(stationId, out var packet))
+            return true;
+
+        DroneStationGadgetModel? stationModel;
+        try
+        {
+            stationModel = GameState.GetIdentifiableModel(new ActorId(stationId))?.TryCast<DroneStationGadgetModel>();
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (stationModel == null)
+            return false;
+
+        IdentifiableType? targetIdentType = null;
+        if (packet.TargetIdent != -1 &&
+            (!ActorManager.ActorTypes.TryGetValue(packet.TargetIdent, out targetIdentType) || targetIdentType == null))
+            return false;
+
+        var wasHandlingPacket = HandlingPacket;
+        HandlingPacket = true;
+        try
+        {
+            ApplyDroneTask(
+                stationModel,
+                (DroneTaskTargetType)packet.Target,
+                targetIdentType,
+                (DroneTaskSourceType)packet.Source,
+                (DroneTaskSinkType)packet.Sink);
+            PendingDroneTasks.Remove(stationId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SrLogger.LogDebug($"Drone task for station {stationId} is waiting for its model: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
+    }
+
+    private static void StartDroneTaskPumpIfNeeded()
+    {
+        if (droneTaskPumpRunning || PendingDroneTasks.Count == 0)
+            return;
+
+        droneTaskPumpRunning = true;
+        StartCoroutine(PumpPendingDroneTasks());
+    }
+
+    private static IEnumerator PumpPendingDroneTasks()
+    {
+        while (PendingDroneTasks.Count > 0)
+        {
+            foreach (var stationId in PendingDroneTasks.Keys.ToArray())
+                TryApplyPendingDroneTask(stationId);
+
+            if (PendingDroneTasks.Count == 0)
+                break;
+
+            yield return new WaitFrames(15);
+        }
+
+        droneTaskPumpRunning = false;
+    }
+
     internal static IEnumerator EnsureStation(DroneStationGadgetModel stationModel)
     {
         yield return new WaitFrames(3);
@@ -119,7 +217,8 @@ internal static partial class NetworkDroneManager
 
             // A newer assignment happened
             var current = stationModel._taskData;
-            if (current.TargetType != targetType || current.SourceType != sourceType || current.SinkType != sinkType)
+            if (current.TargetType != targetType || current.TargetIdentType != targetIdentType ||
+                current.SourceType != sourceType || current.SinkType != sinkType)
                 yield break;
 
             var assigned = false;
@@ -186,8 +285,17 @@ internal static partial class NetworkDroneManager
 
     internal static IEnumerator SetupInitialStation(DroneStationGadgetModel stationModel, InitialActorsPacket.DroneStation actorData)
     {
-        if (!string.IsNullOrEmpty(actorData.DroneOwnerId))
-            PendingOwners[actorData.ActorId] = actorData.DroneOwnerId;
+        var snapshotOwner = ReconcileOwnerSnapshot(actorData.ActorId, actorData.DroneOwnerId);
+        if (!string.IsNullOrEmpty(snapshotOwner))
+        {
+            PendingOwners[actorData.ActorId] = snapshotOwner;
+            CachedOwners[actorData.ActorId] = snapshotOwner;
+        }
+        else
+        {
+            PendingOwners.Remove(actorData.ActorId);
+            CachedOwners.Remove(actorData.ActorId);
+        }
 
         yield return new WaitFrames(3);
 
@@ -198,6 +306,7 @@ internal static partial class NetworkDroneManager
         if (stationModel == null)
             yield break;
 
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
 
         try
@@ -219,12 +328,16 @@ internal static partial class NetworkDroneManager
                 : null;
 
             ApplyDroneTask(stationModel, actorData.Task.Target, targetIdent, actorData.Task.Source, actorData.Task.Sink);
+            TryApplyPendingDroneTask(actorData.ActorId);
         }
         catch (Exception ex)
         {
             SrLogger.LogWarning($"Failed to set up initial drone station {stationModel.actorId.Value}: {ex.Message}");
         }
 
-        HandlingPacket = false;
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
     }
 }

@@ -7,8 +7,8 @@ namespace SR2MP;
 internal static class StartupCheck
 {
     private const string RequiredGameVersion = BuildInfo.ExactGameVersion;
-    private const string VersionUrl = "https://raw.githubusercontent.com/pyeight/SlimeRancher2Multiplayer/refs/heads/master/latestModVersion.txt";
-    private const string DiscordUrl = BuildInfo.Discord;
+    private const string VersionUrl = BuildInfo.LatestVersionUrl;
+    private const string DiscordUrl = BuildInfo.Releases;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
@@ -56,21 +56,21 @@ internal static class StartupCheck
         {
             case < 0:
                 ShowMessageBox(
-                    "SR2MP is incompatible with this game version.\n\n" +
+                    "Lycoreia is incompatible with this game version.\n\n" +
                     $"Required: {RequiredGameVersion}\n" +
                     $"Detected: {installedGameVersion}",
-                    "SR2MP – Incompatible Game Version",
+                    "Lycoreia – Incompatible Game Version",
                     MB_OK | MB_ICON_ERROR, true
                 );
                 Application.Quit();
                 return;
             case > 0:
                 ShowMessageBox(
-                    "You are running a newer game version than SR2MP was built for.\n\n" +
+                    "You are running a newer game version than Lycoreia was built for.\n\n" +
                     $"Required: {RequiredGameVersion}\n" +
                     $"Detected: {installedGameVersion}\n\n" +
                     "The mod may still work, but issues are possible.",
-                    "SR2MP – Newer Game Version Detected",
+                    "Lycoreia – Newer Game Version Detected",
                     MB_OK | MB_ICON_WARNING, false
                 );
                 break;
@@ -114,21 +114,21 @@ internal static class StartupCheck
                 "There is a released build with this version number.\n\n" +
                 $"This is a dev build with version: {latestVersion}, " +
                 "which is already publicly released as a real update.\n\n",
-                "SR2MP – Dev Build On A Released Version",
+                "Lycoreia – Dev Build On A Released Version",
                 MB_OK | MB_ICON_WARNING, false
             );
         }
         catch (TaskCanceledException)
         {
-            SrLogger.LogWarning("SR2MP dev build version check timed out");
+            SrLogger.LogWarning("Lycoreia dev build version check timed out");
         }
         catch (HttpRequestException ex)
         {
-            SrLogger.LogWarning($"SR2MP dev build version check failed: Network error\n{ex.Message}");
+            SrLogger.LogWarning($"Lycoreia dev build version check failed: Network error\n{ex.Message}");
         }
         catch (Exception ex)
         {
-            SrLogger.LogWarning($"Failed to check SR2MP dev build version\n{ex}");
+            SrLogger.LogWarning($"Failed to check Lycoreia dev build version\n{ex}");
         }
     }
 
@@ -146,19 +146,20 @@ internal static class StartupCheck
             using var client = new HttpClient();
             client.Timeout = TimeSpan.FromSeconds(5);
 
-            const string currentModVersion = BuildInfo.Version;
+            var currentModVersion = StripPreReleaseSuffix(BuildInfo.Version);
             var latestVersion = (await client.GetStringAsync(VersionUrl)).Trim();
+            latestVersion = StripPreReleaseSuffix(latestVersion);
 
             switch (CompareVersions(currentModVersion, latestVersion))
             {
                 case < 0:
                     ShowMessageBox(
-                        "Your SR2MP mod is outdated!\n\n" +
+                        "Your Lycoreia mod is outdated!\n\n" +
                         $"Your version: {currentModVersion}\n" +
                         $"Latest version: {latestVersion}\n\n" +
-                        "Click OK to join our Discord or get a new version from NexusMods.\n" +
+                        "Click OK to open the Lycoreia releases page.\n" +
                         "The game will close after clicking OK.",
-                        "SR2MP – Update Available",
+                        "Lycoreia – Update Available",
                         MB_OK | MB_ICON_WARNING, true
                     );
 
@@ -168,11 +169,11 @@ internal static class StartupCheck
 
                 case > 0:
                     ShowMessageBox(
-                        "Your SR2MP mod version is newer than the latest release.\n\n" +
+                        "Your Lycoreia mod version is newer than the latest release.\n\n" +
                         $"Your version: {currentModVersion}\n" +
                         $"Latest version: {latestVersion}\n\n" +
                         "This version is not officially supported and may not work correctly.",
-                        "SR2MP – Unsupported Version",
+                        "Lycoreia – Unsupported Version",
                         MB_OK | MB_ICON_WARNING, false
                     );
                     break;
@@ -180,15 +181,15 @@ internal static class StartupCheck
         }
         catch (TaskCanceledException)
         {
-            SrLogger.LogWarning("SR2MP version check timed out");
+            SrLogger.LogWarning("Lycoreia version check timed out");
         }
         catch (HttpRequestException ex)
         {
-            SrLogger.LogWarning($"SR2MP version check failed: Network error\n{ex.Message}");
+            SrLogger.LogWarning($"Lycoreia version check failed: Network error\n{ex.Message}");
         }
         catch (Exception ex)
         {
-            SrLogger.LogWarning($"Failed to check SR2MP version\n{ex}");
+            SrLogger.LogWarning($"Failed to check Lycoreia version\n{ex}");
         }
     }
 

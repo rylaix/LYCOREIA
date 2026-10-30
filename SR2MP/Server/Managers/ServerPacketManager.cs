@@ -68,6 +68,7 @@ internal sealed class ServerPacketManager
         var reliability      = (PacketReliability)data[8];
         var sequenceNumber   = (ushort)(data[9] | (data[10] << 8));
         var receivedCrc      = (ushort)(data[11] | (data[12] << 8));
+        Logger.RecordPacket("in", packetTypeHeader, receivedBytes, totalChunks);
 
         var trueChunkLength = receivedBytes - HeaderSize;
 
@@ -75,6 +76,7 @@ internal sealed class ServerPacketManager
 
         if (receivedCrc != expectedCrc)
         {
+            Logger.RecordNetworkProblem("in", packetTypeHeader, "crc-mismatch");
             SrLogger.LogPacketAcknowledge(
                 $"Corrupted packet dropped: type={packetTypeHeader}" +
                 $"expected=0x{expectedCrc:X4} received=0x{receivedCrc:X4}");

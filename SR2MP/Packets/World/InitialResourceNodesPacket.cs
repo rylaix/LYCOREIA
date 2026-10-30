@@ -7,7 +7,7 @@ internal sealed class InitialResourceNodesPacket : IPacket
     public List<ResourceNodePlacement> Nodes = new();
 
     public PacketType Type => PacketType.InitialResourceNodes;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

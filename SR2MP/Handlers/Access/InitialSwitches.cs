@@ -12,10 +12,16 @@ internal sealed class InitialSwitchesHandler : BasePacketHandler<InitialSwitches
 {
     protected override bool Handle(InitialSwitchesPacket packet, IPEndPoint? _)
     {
+        if (packet.Switches == null)
+            return false;
+
         var gameModel = GameState;
 
         foreach (var worldSwitch in packet.Switches)
         {
+            if (worldSwitch == null || string.IsNullOrWhiteSpace(worldSwitch.ID))
+                continue;
+
             if (gameModel.switches.TryGetValue(worldSwitch.ID, out var switchModel))
             {
                 switchModel.state = worldSwitch.State;
@@ -24,6 +30,8 @@ internal sealed class InitialSwitchesHandler : BasePacketHandler<InitialSwitches
                     continue;
 
                 var switchComponentBase = switchModel.gameObj.GetComponent<WorldSwitchModel.Participant>();
+                if (switchComponentBase == null)
+                    continue;
 
                 switchComponentBase.SetModel(switchModel);
 
@@ -31,11 +39,18 @@ internal sealed class InitialSwitchesHandler : BasePacketHandler<InitialSwitches
                 var secondary = switchComponentBase.TryCast<WorldStateSecondarySwitch>();
                 var invisible = switchComponentBase.TryCast<WorldStateInvisibleSwitch>();
 
+                var wasHandlingPacket = HandlingPacket;
                 HandlingPacket = true;
-                primary?.SetStateForAll(worldSwitch.State, true);
-                secondary?.SetState(worldSwitch.State, true);
-                invisible?.SetStateForAll(worldSwitch.State, true);
-                HandlingPacket = false;
+                try
+                {
+                    primary?.SetStateForAll(worldSwitch.State, true);
+                    secondary?.SetState(worldSwitch.State, true);
+                    invisible?.SetStateForAll(worldSwitch.State, true);
+                }
+                finally
+                {
+                    HandlingPacket = wasHandlingPacket;
+                }
             }
             else
             {

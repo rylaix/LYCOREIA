@@ -10,7 +10,7 @@ internal sealed class AmmoAddPacket : IPacket
     public string? ID;
 
     public PacketType Type => PacketType.AmmoAdd;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.Ammo;
 
     public void Serialise(PacketWriter writer)

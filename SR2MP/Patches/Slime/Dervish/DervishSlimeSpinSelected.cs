@@ -3,6 +3,7 @@ using Il2CppMonomiPark.SlimeRancher.Slime.Dervish;
 using MelonLoader;
 using SR2MP.Components.Actor;
 using SR2MP.Packets.Slime.Dervish;
+using SR2MP.Shared.Managers;
 
 namespace SR2MP.Patches.Slime.Dervish;
 
@@ -14,6 +15,7 @@ internal static class DervishSlimeSpinSelected
         if (!Main.Server.IsRunning && !Main.Client.IsConnected) return true;
         
         var networkActor = __instance.GetComponent<NetworkActor>();
+        if (!networkActor) return true;
         if (!networkActor.LocallyOwned && !HandlingPacket) return false;
 
         return true;
@@ -25,6 +27,7 @@ internal static class DervishSlimeSpinSelected
         if (HandlingPacket) return;
 
         var networkActor = __instance.GetComponent<NetworkActor>();
+        if (!networkActor) return;
         if (!networkActor.LocallyOwned) return;
 
         if (!__instance._cyclone) return;
@@ -37,6 +40,6 @@ internal static class DervishSlimeSpinSelected
             FloatDir = __instance._floatDir
         };
 
-        Main.SendToAllOrServer(packet);
+        NetworkSlimeBehaviorManager.Publish(packet);
     }
 }

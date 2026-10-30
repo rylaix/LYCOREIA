@@ -1,42 +1,33 @@
 ﻿using System.Net;
-using Il2CppMonomiPark.SlimeRancher.Slime.Slumber;
 using SR2MP.Handlers.Internal;
 using SR2MP.Packets.Slime.Sloomber;
 using SR2MP.Packets.Utils;
+using SR2MP.Shared.Managers;
 
 namespace SR2MP.Handlers.Slime.Sloomber;
 
 [PacketHandler((byte)PacketType.SloomberYawn)]
 internal sealed class SloomberYawnHandler : BasePacketHandler<SloomberYawnPacket>
 {
-    protected override bool Handle(SloomberYawnPacket packet, IPEndPoint? _)
+    protected override bool Handle(SloomberYawnPacket packet, IPEndPoint? clientEp)
     {
-        if (!ActorManager.Actors.TryGetValue(packet.ActorId.Value, out var model))
+        if (packet.ActorId.Value <= 0 || packet.Revision < 0)
             return false;
 
-        if (!model.TryGetNetworkComponent(out var networkComponent))
-            return false;
-
-        var yawn = networkComponent.GetComponent<InitiateYawn>();
-        if (!yawn)
-            return false;
-
-        HandlingPacket = true;
-
-        if (packet.Active)
+        if (!NetworkActorManager.IsCurrentActorOwner(packet.ActorId, clientEp))
         {
-            foreach (var reactable in yawn._yawnComponentReactables)
-                reactable.BeginYawn();
-        }
-        else
-        {
-            yawn.DoYawn();
-
-            foreach (var reactable in yawn._yawnComponentReactables)
-                reactable.EndYawn();
+            if (IsServerSide)
+                NetworkSlimeBehaviorManager.TryDeferOwnerRequest(packet, clientEp);
+            return false;
         }
 
-        HandlingPacket = false;
-        return true;
+        if (IsServerSide)
+            return NetworkSlimeBehaviorManager.AcceptClientPacket(packet);
+
+        if (packet.Revision <= 0)
+            return false;
+
+        NetworkSlimeBehaviorManager.Receive(packet);
+        return false;
     }
 }

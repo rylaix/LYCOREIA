@@ -2,12 +2,14 @@
 using Il2CppMonomiPark.SlimeRancher.Weather;
 using SR2MP.Client.Managers;
 using SR2MP.Packets.Utils;
+using SR2MP.Server.Managers;
 
 namespace SR2MP.Packets.World;
 
 internal sealed class WeatherPacket : IPacket
 {
     public Dictionary<string, WeatherZoneData> Zones;
+    public long Revision;
 
     public PacketType Type { get; private init; }
     public PacketReliability Reliability => PacketReliability.Reliable;
@@ -15,6 +17,7 @@ internal sealed class WeatherPacket : IPacket
 
     public void Serialise(PacketWriter writer)
     {
+        writer.WritePackedLong(Revision);
         writer.WriteDictionary(Zones, PacketWriterDels.String, (w, zone) =>
         {
             w.WriteList(zone.WeatherForecasts, (fw, forecast) =>
@@ -33,7 +36,7 @@ internal sealed class WeatherPacket : IPacket
 
     public void Deserialise(PacketReader reader)
     {
-        NetworkWeatherManager.CheckInitialized();
+        Revision = reader.ReadPackedLong();
         Zones = reader.ReadDictionary(PacketReaderDels.String, PacketReaderDels.NetObject<WeatherZoneData>.Reader)!;
     }
 
@@ -42,6 +45,7 @@ internal sealed class WeatherPacket : IPacket
         var packet = new WeatherPacket
         {
             Type = type,
+            Revision = WeatherUpdateHelper.NextRevision(),
             Zones = new Dictionary<string, WeatherZoneData>()
         };
 
@@ -58,13 +62,10 @@ internal sealed class WeatherPacket : IPacket
             
             foreach (var forecast in zone.Value.Forecast)
             {
-                if (!forecast.Started)
-                    continue;
-
                 zoneData.WeatherForecasts.Add(new WeatherForecast
                 {
                     State = forecast.State.Cast<WeatherStateDefinition>(),
-                    WeatherStarted = true,
+                    WeatherStarted = forecast.Started,
                     StartTime = forecast.StartTime,
                     EndTime = forecast.EndTime
                 });
@@ -75,6 +76,28 @@ internal sealed class WeatherPacket : IPacket
 
         return packet;
     }
+
+#if SR2MP_TEST
+    internal static bool VerifyRevisionSerializationRoundTrip()
+    {
+        var expected = new WeatherPacket
+        {
+            Type = PacketType.WeatherUpdate,
+            Revision = 12345,
+            Zones = new Dictionary<string, WeatherZoneData>()
+        };
+
+        using var writer = PacketWriter.Borrow();
+        expected.Serialise(writer);
+        var bytes = writer.ToSpan().ToArray();
+
+        using var reader = PacketReader.Borrow(bytes);
+        var actual = new WeatherPacket();
+        actual.Deserialise(reader);
+
+        return reader.BytesRemaining == 0 && actual.Revision == expected.Revision && actual.Zones.Count == 0;
+    }
+#endif
 }
 
 internal sealed class WeatherZoneData : INetObject
@@ -104,18 +127,64 @@ internal sealed class WeatherForecast : INetObject
 
     public void Serialise(PacketWriter writer)
     {
-        writer.WritePackedInt(NetworkWeatherManager.GetPersistentID(State));
-        writer.WriteBool(WeatherStarted);
-        writer.WriteDouble(StartTime);
-        writer.WriteDouble(EndTime);
+        WritePayload(
+            writer,
+            NetworkWeatherManager.GetPersistentID(State),
+            WeatherStarted,
+            StartTime,
+            EndTime);
     }
 
     public void Deserialise(PacketReader reader)
     {
+        ReadPayload(reader, out var persistentId, out var weatherStarted, out var startTime, out var endTime);
         NetworkWeatherManager.CheckInitialized();
-        State = NetworkWeatherManager.WeatherStates[reader.ReadPackedInt()];
-        WeatherStarted = reader.ReadBool();
-        StartTime = reader.ReadDouble();
-        EndTime = reader.ReadDouble();
+        State = NetworkWeatherManager.WeatherStates[persistentId];
+        WeatherStarted = weatherStarted;
+        StartTime = startTime;
+        EndTime = endTime;
     }
+
+    internal static void WritePayload(
+        PacketWriter writer,
+        int persistentId,
+        bool weatherStarted,
+        double startTime,
+        double endTime)
+    {
+        writer.WritePackedInt(persistentId);
+        writer.WriteBool(weatherStarted);
+        writer.WriteDouble(startTime);
+        writer.WriteDouble(endTime);
+    }
+
+    internal static void ReadPayload(
+        PacketReader reader,
+        out int persistentId,
+        out bool weatherStarted,
+        out double startTime,
+        out double endTime)
+    {
+        persistentId = reader.ReadPackedInt();
+        weatherStarted = reader.ReadBool();
+        startTime = reader.ReadDouble();
+        endTime = reader.ReadDouble();
+    }
+
+#if SR2MP_TEST
+    internal static bool VerifyPayloadSerializationRoundTrip()
+    {
+        using var writer = PacketWriter.Borrow();
+        WritePayload(writer, 481, weatherStarted: false, startTime: 17.25, endTime: 48.5);
+        var bytes = writer.ToSpan().ToArray();
+
+        using var reader = PacketReader.Borrow(bytes);
+        ReadPayload(reader, out var id, out var started, out var start, out var end);
+        return reader.BytesRemaining == 0
+               && id == 481
+               && !started
+               && start == 17.25
+               && end == 48.5;
+    }
+#endif
 }

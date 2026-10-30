@@ -11,12 +11,17 @@ internal sealed class InitialPlortDepositorsHandler : BasePacketHandler<InitialP
 {
     protected override bool Handle(InitialPlortDepositorsPacket packet, IPEndPoint? _)
     {
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
-
-        foreach (var depositor in packet.Depositors)
-            NetworkPlortDepositorManager.ApplyState(depositor.ID, depositor.AmountDeposited);
-
-        HandlingPacket = false;
+        try
+        {
+            foreach (var depositor in packet.Depositors)
+                NetworkPlortDepositorManager.ApplyState(depositor.ID, depositor.AmountDeposited);
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
 
         return false;
     }

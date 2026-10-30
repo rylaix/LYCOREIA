@@ -19,7 +19,8 @@ internal static class FXConstants
         { PlayerFXType.VacRunning, true },
         { PlayerFXType.VacRunningStart, true },
         { PlayerFXType.VacRunningEnd, true },
-        { PlayerFXType.VacShootSound, true }
+        { PlayerFXType.VacShootSound, true },
+        { PlayerFXType.VacShockwave, false }
     });
     public static readonly ReadOnlyDictionary<PlayerFXType, bool> DoesPlayerSoundLoopDictionary = new(new Dictionary<PlayerFXType, bool>
     {

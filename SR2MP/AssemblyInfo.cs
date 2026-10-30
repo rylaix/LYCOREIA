@@ -5,8 +5,8 @@ using MelonLoader;
 [assembly: AssemblyDescription(BuildInfo.Description)]
 [assembly: AssemblyCompany(BuildInfo.Author)]
 [assembly: AssemblyProduct(BuildInfo.Name)]
-[assembly: AssemblyCopyright($"Created by {BuildInfo.Author}")]
-[assembly: AssemblyTrademark(BuildInfo.Author)]
+[assembly: AssemblyCopyright("Copyright (C) 2026 Rylaix and Lycoreia contributors; portions (C) Ranching Together contributors. GPLv3")]
+[assembly: AssemblyTrademark("")]
 [assembly: AssemblyVersion(BuildInfo.MelonVersion)]
 [assembly: AssemblyFileVersion(BuildInfo.MelonVersion)]
 

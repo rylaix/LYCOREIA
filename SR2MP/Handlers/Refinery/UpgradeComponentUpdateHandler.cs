@@ -10,23 +10,36 @@ internal sealed class UpgradeComponentUpdateHandler : BasePacketHandler<UpgradeC
 {
     protected override bool Handle(UpgradeComponentPacket packet, IPEndPoint? _)
     {
+        if (InitialComponentsHandler.TryQueueDelta(packet))
+            return true;
+
+        return ApplyAuthoritativeUpdate(packet);
+    }
+
+    internal static bool ApplyAuthoritativeUpdate(UpgradeComponentPacket packet)
+    {
         var model = GameState.PlayerModel.UpgradeComponentsModel;
 
         var comp = model._upgradeComponentList.items._items.FirstOrDefault(x => x._referenceId == packet.ComponentId);
         if (comp == null)
             return false;
 
+        var wasHandlingPacket = HandlingPacket;
         HandlingPacket = true;
+        try
+        {
+            if (model._ownedComponents.ContainsKey(comp))
+                model._ownedComponents[comp] = packet.Count;
+            else
+                model._ownedComponents.Add(comp, packet.Count);
 
-        if (model._ownedComponents.ContainsKey(comp))
-            model._ownedComponents[comp] = packet.Count;
-        else
-            model._ownedComponents.Add(comp, packet.Count);
-
-        model.OwnedComponentsChanged?.Invoke(comp, packet.Count);
-        model.NotifyParticipants();
-
-        HandlingPacket = false;
+            model.OwnedComponentsChanged?.Invoke(comp, packet.Count);
+            model.NotifyParticipants();
+        }
+        finally
+        {
+            HandlingPacket = wasHandlingPacket;
+        }
 
         return true;
     }

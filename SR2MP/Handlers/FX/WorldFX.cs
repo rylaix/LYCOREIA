@@ -11,25 +11,47 @@ internal sealed class WorldFXHandler : BasePacketHandler<WorldFXPacket>
 {
     protected override bool Handle(WorldFXPacket packet, IPEndPoint? _)
     {
-        if (!IsWorldSoundDictionary[packet.FX])
+        if (!IsWorldSoundDictionary.TryGetValue(packet.FX, out var isSound))
+            return true;
+
+        if (!isSound)
         {
-            var fxPrefab = FXManager.WorldFXMap[packet.FX];
+            var worldFxMap = FXManager.WorldFXMap;
+            if (worldFxMap == null || !worldFxMap.TryGetValue(packet.FX, out var fxPrefab) || !fxPrefab)
+                return true; // World FX are transient; an early packet can be safely dropped before scene assets load.
+
+            var wasHandlingPacket = HandlingPacket;
             HandlingPacket = true;
             try
             {
                 FXHelpers.SpawnAndPlayFX(fxPrefab, packet.Position, Quaternion.identity);
             }
-            catch
+            catch (Exception ex)
             {
-                // ignored
+                SrLogger.LogDebug($"Could not play remote world FX {packet.FX}: {ex.Message}");
             }
-
-            HandlingPacket = false;
+            finally
+            {
+                HandlingPacket = wasHandlingPacket;
+            }
         }
         else
         {
-            var cue = FXManager.WorldAudioCueMap[packet.FX];
-            RemoteFXManager.PlayTransientAudio(cue, packet.Position, WorldSoundVolumeDictionary[packet.FX]);
+            var audioMap = FXManager.WorldAudioCueMap;
+            if (audioMap == null
+                || !audioMap.TryGetValue(packet.FX, out var cue)
+                || !cue
+                || !WorldSoundVolumeDictionary.TryGetValue(packet.FX, out var volume))
+                return true;
+
+            try
+            {
+                RemoteFXManager.PlayTransientAudio(cue, packet.Position, volume);
+            }
+            catch (Exception ex)
+            {
+                SrLogger.LogDebug($"Could not play remote world audio {packet.FX}: {ex.Message}");
+            }
         }
 
         return true;

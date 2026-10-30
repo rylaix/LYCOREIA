@@ -12,6 +12,11 @@ internal static class OnGameLoadPatch
     {
         foreach (var actor in GameState.identifiables)
         {
+            // Player avatars use the dedicated NetworkPlayer path. Treating the
+            // player's backing ActorModel as a world actor makes it enter actor
+            // snapshots even though NetworkActor.Start rejects SRCharacterController.
+            if (actor.value.ident.IsPlayer) continue;
+
             if (actor.value.TryCast<ActorModel>() == null) continue;
 
             // Drones dont get NetworkActor
@@ -27,6 +32,8 @@ internal static class OnGameLoadPatch
             if (networkComponent)
             {
                 networkComponent.CurrentOwnerId = LocalID;
+                networkComponent.LocallyOwned = true;
+                ActorManager.OwnershipByActorId[actor.value.actorId.Value] = LocalID;
                 continue;
             }
             
@@ -35,6 +42,7 @@ internal static class OnGameLoadPatch
             networkComponent2.CurrentOwnerId = LocalID;
 
             ActorManager.Actors[actor.value.actorId.Value] = actor.value;
+            ActorManager.OwnershipByActorId[actor.value.actorId.Value] = LocalID;
         }
 
         GameState._actorIdProvider._nextActorId =

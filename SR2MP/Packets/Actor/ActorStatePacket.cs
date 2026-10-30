@@ -6,9 +6,11 @@ using Unity.Mathematics;
 namespace SR2MP.Packets.Actor;
 
 [StructLayout(LayoutKind.Auto)]
-internal struct ActorStatePacket : IPacket
+internal struct ActorStatePacket : IActorWorldRevisionPacket
 {
     public ActorId ActorId;
+    public long WorldRevision { get; set; }
+    public bool HasWorldRevision { get; set; }
 
     public float4 Emotions;
     public bool Sleeping;
@@ -23,7 +25,7 @@ internal struct ActorStatePacket : IPacket
     public ActorUpdateType UpdateType;
 
     public readonly PacketType Type => PacketType.ActorState;
-    public readonly PacketReliability Reliability => PacketReliability.Reliable;
+    public readonly PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public readonly NetworkChannel Channel => NetworkChannel.ActorCritical;
 
     public readonly void Serialise(PacketWriter writer)
@@ -49,6 +51,9 @@ internal struct ActorStatePacket : IPacket
                 writer.WriteFloat(InvulnerablePeriod);
                 break;
         }
+
+        if (HasWorldRevision)
+            writer.WriteLong(WorldRevision);
     }
 
     public void Deserialise(PacketReader reader)
@@ -73,6 +78,12 @@ internal struct ActorStatePacket : IPacket
                 Invulnerable       = reader.ReadBool();
                 InvulnerablePeriod = reader.ReadFloat();
                 break;
+        }
+
+        if (reader.BytesRemaining >= sizeof(long))
+        {
+            WorldRevision = reader.ReadLong();
+            HasWorldRevision = true;
         }
     }
 }

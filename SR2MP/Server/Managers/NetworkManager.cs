@@ -41,8 +41,8 @@ internal sealed class NetworkManager
                 SrLogger.LogMessage($"Server started in IPv4 mode on port: {port}");
             }
 
-            udpClient.Client.ReceiveBufferSize = 512 * 1024;
-            udpClient.Client.SendBufferSize = 512 * 1024;
+            udpClient.Client.ReceiveBufferSize = 2 * 1024 * 1024;
+            udpClient.Client.SendBufferSize = 2 * 1024 * 1024;
             udpClient.Client.ReceiveTimeout = 0;
 
             reliabilityManager = new ReliabilityManager(SendRaw);
@@ -165,6 +165,8 @@ internal sealed class NetworkManager
         if (data.Array != null)
             udpClient?.Client.SendTo(data.Array, data.Offset, data.Count, SocketFlags.None, endPoint);
     }
+
+    public void ResetReliabilityPeer(IPEndPoint peer) => reliabilityManager?.ResetPeer(peer);
 
     public void HandleAck(IPEndPoint sender, ushort packetId, byte packetType)
         => reliabilityManager?.HandleAck(sender, packetId, packetType);

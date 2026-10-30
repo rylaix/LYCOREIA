@@ -8,7 +8,7 @@ internal sealed class PuzzleSlotPacket : IPacket
     public bool Filled;
 
     public PacketType Type => PacketType.PuzzleSlot;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

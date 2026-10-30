@@ -21,7 +21,11 @@ public static class GlobalVariables
     /// <summary>
     /// Gets a value indicating whether verbose garden logging is enabled.
     /// </summary>
+#if SR2MP_TEST
+    public static bool GardenLogging { get; } = Environment.GetEnvironmentVariable("SR2MP_TEST_TRACE_GARDENS") == "1";
+#else
     public static bool GardenLogging { get; } = false;
+#endif
 
     internal static readonly string[] CheatCommands = {
         "actortype", "clearinv", "delwarp", "emotions", "fastforward", "flatlook", "fling", "floaty", "freeze",

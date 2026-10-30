@@ -1,4 +1,5 @@
 ﻿using System.Net;
+using SR2MP.Components.FX;
 using SR2MP.Components.UI;
 using SR2MP.Handlers.Internal;
 using SR2MP.Packets;
@@ -11,6 +12,7 @@ internal abstract class BasePlayerLeaveHandler : BasePacketHandler<PlayerLeavePa
 {
     protected static void RemovePlayerData(string playerId)
     {
+        RemoteVacuumSuctionFX.ForgetPendingPlayer(playerId);
         PlayerManager.RemovePlayer(playerId);
 
         if (PlayerObjects.TryGetValue(playerId, out var playerObj))
@@ -46,11 +48,26 @@ internal sealed class ServerPlayerLeaveHandler : BasePlayerLeaveHandler
 {
     protected override bool Handle(PlayerLeavePacket packet, IPEndPoint? clientEp)
     {
+        if (!RequireAuthenticatedPlayer(clientEp, packet.PlayerId))
+            return false;
+
         var playerId = packet.PlayerId;
 
         if (PlayerManager.GetPlayer(playerId) == null)
         {
-            SrLogger.LogMessage($"Player {playerId} doesn't exist (already left?)");
+            // A client can disconnect after Connect registration but before its
+            // PlayerJoin packet arrives. In that state there is no player model
+            // to broadcast as leaving, but the authenticated endpoint still
+            // needs to be removed so it does not occupy a stale client slot.
+            var preJoinClientInfo = $"{clientEp!.Address}:{clientEp.Port}";
+            RemovePlayerData(playerId);
+            if (Main.Server.ClientManager.RemoveClient(preJoinClientInfo))
+                SrLogger.LogMessage(
+                    $"Removed pre-join client registration (PlayerId: {playerId})",
+                    $"Removed pre-join client registration: {preJoinClientInfo} (PlayerId: {playerId})");
+            else
+                SrLogger.LogMessage($"Player {playerId} doesn't exist and its client registration was already removed");
+
             return false;
         }
 

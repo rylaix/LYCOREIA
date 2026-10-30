@@ -25,7 +25,7 @@ internal sealed class InitialSwitchesPacket : IPacket
     public List<Switch> Switches;
 
     public PacketType Type => PacketType.InitialSwitches;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer) => writer.WriteList(Switches, PacketWriterDels.NetObject<Switch>.Writer);

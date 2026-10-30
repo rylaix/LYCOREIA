@@ -8,7 +8,7 @@ internal sealed class ResourceNodePacket : IPacket
     public byte State;
 
     public PacketType Type => PacketType.ResourceNode;
-    public PacketReliability Reliability => PacketReliability.Reliable;
+    public PacketReliability Reliability => PacketReliability.ReliableOrdered;
     public NetworkChannel Channel => NetworkChannel.WorldState;
 
     public void Serialise(PacketWriter writer)

@@ -2,8 +2,10 @@
 using Il2CppTMPro;
 using MelonLoader;
 using MelonLoader.Utils;
+using Starlight.Buttons;
 using Starlight.Expansion;
 using SR2MP.Client;
+using SR2MP.Client.Managers;
 using SR2MP.Components.FX;
 using SR2MP.Components.Player;
 using SR2MP.Components.Time;
@@ -61,6 +63,12 @@ public sealed class Main : StarlightExpansionV01
     /// </summary>
     public static SR2MPServer Server { get; private set; }
 
+    /// <summary>
+    /// True while hosting or connected. Safe before the mod has initialised (Server/Client are created
+    /// late): game code can call into patches during the first scene load.
+    /// </summary>
+    internal static bool IsNetworkActive => Server?.IsRunning == true || Client?.IsConnected == true;
+
     internal static readonly Assembly Core = typeof(Main).Assembly;
 
     private static MelonPreferences_Category preferences;
@@ -108,6 +116,7 @@ public sealed class Main : StarlightExpansionV01
     internal static string SavedConnectPort => preferences.GetEntry<string>("recent_port").Value;
     internal static string SavedConnectIP => preferences.GetEntry<string>("recent_ip").Value;
     internal static string SavedHostPort => preferences.GetEntry<string>("host_port").Value;
+    internal static string CoopJoinGame => preferences.GetEntry<string>("coop_join_game").Value;
     internal static bool SetupUI => preferences.GetEntry<bool>("internal_setup_ui_new_new").Value;
     internal static bool PacketSizeLogging => preferences.GetEntry<bool>("packet_size_log").Value;
     internal static bool PacketAcknowledgeLogging => preferences.GetEntry<bool>("packet_ack_log").Value;
@@ -135,12 +144,21 @@ public sealed class Main : StarlightExpansionV01
         preferences.CreateEntry("recent_port", string.Empty, is_hidden: true);
         preferences.CreateEntry("recent_ip", string.Empty, is_hidden: true);
         preferences.CreateEntry("host_port", "1919", is_hidden: true);
+        preferences.CreateEntry("coop_join_game", string.Empty, is_hidden: true);
         preferences.CreateEntry("firewall_exceptions", string.Empty, is_hidden: true);
 
         Firewall.Initialize(preferences.GetEntry<string>("firewall_exceptions"));
 
         preferences.CreateEntry("packet_size_log", false, display_name: "Packet Size Logging");
         preferences.CreateEntry("packet_ack_log", true, display_name: "Packet Acknowledge Logging");
+        // Player builds default to off (the JSON diagnostics cost frame time); test and deep-log builds keep them on.
+        preferences.CreateEntry("development_diagnostics",
+#if SR2MP_TEST || SR2MP_DEEPLOG
+            true,
+#else
+            false,
+#endif
+            display_name: "Development Diagnostics (bounded logs)");
         // preferences.CreateEntry("remote_gadget_preview_shaders", false, display_name: "Remote Gadget Preview Hologram Shader");
 
         preferences.CreateEntry("save_backups", true, display_name: "Automatic Save Backups");
@@ -157,6 +175,11 @@ public sealed class Main : StarlightExpansionV01
 
         Client = new SR2MPClient();
         Server = new SR2MPServer();
+        Logger.ConfigureDiagnostics(preferences.GetEntry<bool>("development_diagnostics").Value);
+        NetworkWeatherManager.SubscribeToClientLifecycle();
+        NetworkSanctuaryManager.Initialize();
+        NetworkPrismaDisruptionManager.Initialize();
+        NetworkStabilizingFieldSpawnerManager.Initialize();
     }
 
     /// <inheritdoc/>
@@ -174,6 +197,7 @@ public sealed class Main : StarlightExpansionV01
     /// <inheritdoc/>
     public override void OnSceneWasLoaded(int buildIndex, string sceneName)
     {
+        Logger.LogDiagnostic("scene", "scene-loaded", $"buildIndex={buildIndex}; scene={sceneName}");
         switch (sceneName)
         {
             case "SystemCore":
@@ -192,11 +216,13 @@ public sealed class Main : StarlightExpansionV01
 
                 Application.quitting += new Action(() =>
                 {
+                    Logger.LogDiagnostic("runtime", "application-quitting", "shutdown requested");
                     DiscordRPCManager.Shutdown();
                     if (Server.IsRunning)
                         Server.Close();
                     if (Client.IsConnected)
                         Client.Disconnect();
+                    Logger.FlushDiagnostics();
                 });
 
                 PlayerManager.OnPlayerAdded += _ => DiscordRPCManager.UpdatePresence();
@@ -205,6 +231,9 @@ public sealed class Main : StarlightExpansionV01
 
             case "MainMenuEnvironment":
                 InitializePlayer("BeatrixMainMenu", 0.85f);
+                // Test hook only (unset for players): opens the native menu so its render can be checked.
+                if (Environment.GetEnvironmentVariable("LYCOREIA_TEST_OPEN_MENU") == "1")
+                    StartCoroutine(OpenMenuForTest());
                 break;
         }
     }
@@ -217,6 +246,37 @@ public sealed class Main : StarlightExpansionV01
         NetworkAmmoManager.Initialize();
         NetworkDroneManager.Initialize();
         NetworkEventManager.Initialize();
+        RegisterNativeMenuButtons();
+        Logger.LogDiagnostic("scene", "game-context-ready",
+            $"scene={UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}; actorTypes={ActorManager.ActorTypes.Count}");
+    }
+
+    private static System.Collections.IEnumerator OpenMenuForTest()
+    {
+        yield return new WaitForSecondsRealtime(6f);
+        LycoreiaMenu.OpenMenu();
+    }
+
+    private static bool nativeMenuButtonsRegistered;
+
+    /// <summary>"Multiplayer" entries in the game's own main menu and pause menu open <see cref="LycoreiaMenu"/>.</summary>
+    private static void RegisterNativeMenuButtons()
+    {
+        if (nativeMenuButtonsRegistered)
+            return;
+        nativeMenuButtonsRegistered = true;
+
+        try
+        {
+            var label = AddTranslation("Multiplayer", "b.lycoreia_multiplayer", "UI");
+            var icon = EmbeddedResourceEUtil.LoadSprite("Assets.LycoreiaMultiplayer.png").CopyWithoutMipmaps();
+            _ = new CustomMainMenuButton(label, icon, 2, (Action)LycoreiaMenu.OpenMenu);
+            _ = new CustomPauseMenuButton(label, 2, (Action)LycoreiaMenu.OpenMenu);
+        }
+        catch (Exception ex)
+        {
+            SrLogger.LogError($"Could not add the Multiplayer menu buttons: {ex}");
+        }
     }
 
     internal static void SetConfigValue<T>(string key, T value)
@@ -268,7 +328,7 @@ public sealed class Main : StarlightExpansionV01
 
     private static void InsertLicenseFile(string resourceName)
     {
-        var dirPath = Path.Combine(MelonEnvironment.UserDataDirectory, "SR2MP");
+        var dirPath = ModPaths.DataDirectory;
         var filePath = Path.Combine(dirPath, resourceName + ".lic.txt");
 
         if (File.Exists(filePath))

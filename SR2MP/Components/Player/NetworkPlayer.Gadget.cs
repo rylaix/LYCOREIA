@@ -98,6 +98,8 @@ internal partial class NetworkPlayer
         if (transformTimerGadget >= 0f)
             return;
 
+        transformTimerGadget = PlayerTimer;
+
         if (IsLocal)
             UpdateLocalGadgetMode();
         else

@@ -1,6 +1,5 @@
 using System.Net;
-using Il2CppMonomiPark.SlimeRancher.DataModel;
-using Il2CppMonomiPark.SlimeRancher.Drone;
+using SR2MP.Components.Drone;
 using SR2MP.Handlers.Internal;
 using SR2MP.Packets.World;
 using SR2MP.Packets.Utils;
@@ -11,30 +10,35 @@ namespace SR2MP.Handlers.Drone;
 [PacketHandler((byte)PacketType.DroneTask)]
 internal sealed class DroneTaskHandler : BasePacketHandler<DroneProgramPacket>
 {
-    protected override bool Handle(DroneProgramPacket packet, IPEndPoint? _)
+    protected override bool Handle(DroneProgramPacket packet, IPEndPoint? clientEndpoint)
     {
-        var stationModel = GameState.GetIdentifiableModel(new ActorId(packet.ActorId))?.TryCast<DroneStationGadgetModel>();
-        if (stationModel == null)
+        if (Main.Server.IsRunning)
         {
-            SrLogger.LogWarning($"DroneStationGadgetModel {packet.ActorId} not found!");
-            return true;
+            if (!RequireAuthenticatedClient(clientEndpoint) || clientEndpoint == null ||
+                !Main.Server.ClientManager.TryGetClient(clientEndpoint, out var sender) || sender == null)
+            {
+                SrLogger.LogWarning(
+                    $"Rejected DroneTask for station {packet.ActorId} from unauthenticated endpoint " +
+                    $"{clientEndpoint?.ToString() ?? "<null>"}.");
+                return false;
+            }
+
+            var currentOwnerId = NetworkDroneManager.TryGetCurrentOwner(packet.ActorId, out var ownerId)
+                ? ownerId
+                : string.Empty;
+            if (!DroneMutationPolicy.CanAcceptOwnedMutation(
+                    serverSide: true,
+                    endpointAuthenticated: true,
+                    senderId: sender.PlayerId,
+                    currentOwnerId: currentOwnerId))
+            {
+                SrLogger.LogWarning(
+                    $"Rejected DroneTask for station {packet.ActorId} from non-owner '{sender.PlayerId}' " +
+                    $"(current owner '{currentOwnerId}').");
+                return false;
+            }
         }
 
-        var targetIdentType = (packet.TargetIdent != -1 && ActorManager.ActorTypes.TryGetValue(packet.TargetIdent, out var type)) ? type : null!;
-
-        if (packet.TargetIdent != -1 && targetIdentType == null)
-            SrLogger.LogWarning($"Drone task target type {packet.TargetIdent} not found!");
-
-        HandlingPacket = true;
-
-        NetworkDroneManager.ApplyDroneTask(
-            stationModel,
-            (DroneTaskTargetType)packet.Target,
-            targetIdentType,
-            (DroneTaskSourceType)packet.Source,
-            (DroneTaskSinkType)packet.Sink);
-
-        HandlingPacket = false;
-        return true;
+        return NetworkDroneManager.ReceiveDroneTask(packet);
     }
 }
