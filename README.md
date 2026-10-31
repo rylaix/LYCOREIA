@@ -5,6 +5,7 @@ Developed by **[Rylaix](https://github.com/rylaix)** (core developer) with
 **[Kum1te](https://github.com/kum1te)** (core QA). Free software under GPLv3.
 
 [Download](https://github.com/rylaix/Lycoreia/releases) ·
+[Nexus Mods](https://www.nexusmods.com/slimerancher2/mods/200) ·
 [Discord](https://discord.gg/EvD7WhSwqh) ·
 [Report a bug](https://github.com/rylaix/Lycoreia/issues/new/choose) ·
 [Changelog](CHANGELOG.md)
@@ -134,7 +135,7 @@ To restore: close the game and copy the `Steam/...` folder from the backup into
 ### Steps
 1. Install **MelonLoader 0.7.3** onto Slime Rancher 2.
 2. Put `Starlight.dll` into the game's `Mods` folder.
-3. Download `Lycoreia-<version>.zip` from [Releases](https://github.com/rylaix/Lycoreia/releases) and
+3. Download `Lycoreia-<version>.zip` from [Releases](https://github.com/rylaix/Lycoreia/releases) or [Nexus Mods](https://www.nexusmods.com/slimerancher2/mods/200) and
    copy `Mods/SR2MP.dll` into the game's `Mods` folder.
    **Replace Ranching Together**: it uses the same file name, and the two mods cannot run together.
 4. Launch the game; the multiplayer menu appears on the main menu (F4 toggles it).

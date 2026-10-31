@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1
+
+### Fixed
+- Chat: join and leave messages showed raw colour tags around the player's name (for example
+  `<color=#..>Name</color> joined the world!`). The name now shows in the player's colour.
+
+### Changed
+- Lycoreia is now on Nexus Mods: https://www.nexusmods.com/slimerancher2/mods/200 (linked in the mod info and the README).
+
 ## 1.0.0
 
 First stable release of Lycoreia. Same code as 1.0.0-rc.18, tested by the core team in two-player

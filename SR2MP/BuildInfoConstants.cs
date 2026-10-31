@@ -13,11 +13,11 @@ internal static class BuildInfo
     // MelonVersion is shown by ML on startup
     // Version is shown by Starlight
     // Release builds are stamped by tools/set-version.sh (GitHub Action "Build release")
-    internal const string MelonVersion = "1.0.0";
-    internal const string Version = "1.0.0"; // Auto-Dev_Do_not_remove
+    internal const string MelonVersion = "1.0.1";
+    internal const string Version = "1.0.1"; // Auto-Dev_Do_not_remove
     internal const string Discord = "https://discord.gg/EvD7WhSwqh";
     internal const string SourceCode = "https://github.com/rylaix/Lycoreia";
-    internal const string Nexus = "https://github.com/rylaix/Lycoreia/releases";
+    internal const string Nexus = "https://www.nexusmods.com/slimerancher2/mods/200";
     internal const string Releases = "https://github.com/rylaix/Lycoreia/releases";
     internal const string LatestVersionUrl = "https://raw.githubusercontent.com/rylaix/Lycoreia/refs/heads/main/latestModVersion.txt";
     internal const string DiscordAppID = "1565692817748140102";

@@ -341,6 +341,8 @@ internal static class ChatHud
     }
 
     private static readonly Regex ColoredName = new(@"^<color=#([0-9A-Fa-f]{6})>(.*)</color>$", RegexOptions.Compiled);
+    private static readonly Regex ColoredNamePrefix = new(@"^<color=#([0-9A-Fa-f]{6})>(.*?)</color>(.*)$",
+        RegexOptions.Compiled | RegexOptions.Singleline);
 
     private static string Format(MultiplayerUI.ChatMessage message)
     {
@@ -355,7 +357,12 @@ internal static class ChatHud
                 MultiplayerUI.SystemMessageClose => "#FF6B6B",
                 _ => "#7FC8F8"
             };
-            return $"{stamp}<color={color}>{Escape(message.message)}</color>";
+            // "<color=#RRGGBB>name</color> joined the world!": keep the player's name colour, escape the rest.
+            var leading = ColoredNamePrefix.Match(message.message ?? string.Empty);
+            if (leading.Success)
+                return $"{stamp}<color=#{leading.Groups[1].Value}><b>{Escape(leading.Groups[2].Value)}</b></color>" +
+                       $"<color={color}>{Escape(leading.Groups[3].Value)}</color>";
+            return $"{stamp}<color={color}>{Escape(message.message ?? string.Empty)}</color>";
         }
 
         // Names arrive as "<color=#RRGGBB>name</color>" from the sender: only that form is honoured.
