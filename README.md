@@ -10,6 +10,15 @@ Developed by **[Rylaix](https://github.com/rylaix)** (core developer) with
 [Report a bug](https://github.com/rylaix/Lycoreia/issues/new/choose) ·
 [Changelog](CHANGELOG.md)
 
+> [!NOTE]
+> **Heads-up: Lycoreia 2.0.0 is in active development behind the scenes!**
+>
+> If this repository seems quiet, do not worry: we are hard at work on a major clean-room overhaul of our core systems (`Lycoreia.Core`) in private staging.
+>
+> - **What is coming:** A complete rebuild of the synchronization stack using our own custom, host-authoritative architecture. This eliminates legacy desyncs, cuts codebase bloat by over 60%, and enforces strict deterministic state validation.
+> - **Public development status:** Public commits and feature PRs to this repository are temporarily paused while the new internal core is finalized and verified against our test suites.
+> - **Looking to play right now?** Please use the latest release (v1.0.x) from the **Releases** tab. All upcoming improvements will drop together in the **Lycoreia 2.0.0** milestone!
+
 > Lycoreia was the town on Mount Parnassus founded by the survivors of Deucalion's flood.
 > This project is the ranch rebuilt on higher ground.
 
