@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>Lycoreia</AssemblyName>
+    <RootNamespace>Lycoreia</RootNamespace>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>annotations</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>2.0.0-dev</Version>
+    <Company>Rylaix</Company>
+    <Product>Lycoreia</Product>
+    <AssemblyTitle>Lycoreia</AssemblyTitle>
+    <FileVersion>2.0.0</FileVersion>
+    <InformationalVersion>2.0.0-dev</InformationalVersion>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <NoWarn>CS8632;CS8618;CS8600;CS8601;CS8602;CS8603;CS8604;CS8625;CS0108;CS0114;CS0649;CS0169;CS0414;CS8981;IL2CPP0001;CS1591;NU1701</NoWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Flavour Condition="'$(Flavour)'==''">release</Flavour>
+    <DefineConstants Condition="'$(Flavour)'=='deeplog'">$(DefineConstants);DEEPLOG;LYCOREIA_DEEPLOG</DefineConstants>
+    <DefineConstants Condition="'$(Flavour)'=='test'">$(DefineConstants);DEEPLOG;LYC_TEST;LYCOREIA_DEEPLOG;LYCOREIA_TEST</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(MSBuildThisFileDirectory)../../lib/*.dll" Exclude="$(MSBuildThisFileDirectory)../../lib/Mono.Cecil*.dll;$(MSBuildThisFileDirectory)../../lib/AsmResolver*.dll;$(MSBuildThisFileDirectory)../../lib/Microsoft.*.dll;$(MSBuildThisFileDirectory)../../lib/System.*.dll;$(MSBuildThisFileDirectory)../../lib/Il2CppMono*.dll;$(MSBuildThisFileDirectory)../../lib/Il2CppMicrosoft*.dll;$(MSBuildThisFileDirectory)../../lib/Il2CppNewtonsoft.Json.dll;$(MSBuildThisFileDirectory)../../lib/Iced.dll;$(MSBuildThisFileDirectory)../../lib/MonoMod*.dll;$(MSBuildThisFileDirectory)../../lib/Il2CppInterop.Generator.dll">
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Lycoreia feature code (shim in Compat.cs) is compiled into the same single DLL -->
+    <Compile Include="../Lycoreia.Owned/**/*.cs" Exclude="../Lycoreia.Owned/obj/**;../Lycoreia.Owned/bin/**" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../Lycoreia.Owned/Assets/LycoreiaMultiplayer.png" LogicalName="Lycoreia.Assets.LycoreiaMultiplayer.png" />
+  </ItemGroup>
+</Project>

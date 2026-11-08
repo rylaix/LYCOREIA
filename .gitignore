@@ -1,0 +1,19 @@
+# Reference assemblies from the game / MelonLoader (not redistributable): filled locally by tools/pack-reference-libs.sh
+/lib/
+reference-libs*.zip
+# Build output
+bin/
+obj/
+out/
+dist/
+*.user
+.vs/
+.idea/
+.vscode/
+# Player logs, saves and diagnostics (contain IPs, player IDs, save data)
+*.jsonl
+*.jsonl.*
+latest.log*
+sensitive.log*
+UserData/
+SaveBackups/

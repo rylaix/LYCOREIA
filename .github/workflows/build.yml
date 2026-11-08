@@ -1,0 +1,53 @@
+name: Build check
+
+# Builds every push and pull request in all three flavours and runs the test suite.
+# The game's reference assemblies are private (secret REFERENCE_LIBS_URL); pull requests from forks
+# get no secrets, so the build is skipped for them and runs after review instead.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for reference libraries
+        id: refs
+        env:
+          REFERENCE_LIBS_URL: ${{ secrets.REFERENCE_LIBS_URL }}
+        run: |
+          if [[ -z "$REFERENCE_LIBS_URL" ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::REFERENCE_LIBS_URL not available (fork PR or not configured); skipping build."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.refs.outputs.available == 'true'
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Fetch reference libraries (private)
+        if: steps.refs.outputs.available == 'true'
+        env:
+          REFERENCE_LIBS_URL: ${{ secrets.REFERENCE_LIBS_URL }}
+          REFERENCE_LIBS_TOKEN: ${{ secrets.REFERENCE_LIBS_TOKEN }}
+          REFERENCE_LIBS_SHA256: ${{ secrets.REFERENCE_LIBS_SHA256 }}
+        run: |
+          headers=(-H "Accept: application/octet-stream")
+          [[ -n "$REFERENCE_LIBS_TOKEN" ]] && headers+=(-H "Authorization: Bearer $REFERENCE_LIBS_TOKEN")
+          curl -fsSL "${headers[@]}" -o "$RUNNER_TEMP/libs.zip" "$REFERENCE_LIBS_URL"
+          [[ -z "$REFERENCE_LIBS_SHA256" ]] || echo "$REFERENCE_LIBS_SHA256  $RUNNER_TEMP/libs.zip" | sha256sum -c -
+          mkdir -p lib && unzip -q -o "$RUNNER_TEMP/libs.zip" -d lib
+
+      - name: Build and test (release, deeplog, test)
+        if: steps.refs.outputs.available == 'true'
+        run: bash tools/build.sh

@@ -1,0 +1,160 @@
+Lycoreia Source-Available License, version 1.0
+
+Copyright (c) 2026 Rylaix and Kum1te. All rights reserved.
+
+This is NOT an open-source license. Lycoreia's source code is published so
+that players can see what they run, report problems and propose fixes. It
+does not give anyone the right to copy, reuse or redistribute it.
+
+1. Definitions
+
+"Licensors" means Rylaix (https://github.com/rylaix) and Kum1te
+(https://github.com/kum1te), jointly the sole owners of Lycoreia.
+
+"Software" means Lycoreia in any form: source code, compiled builds,
+documentation, protocol and file-format descriptions, images, logos, names,
+text and every other file in this repository or in an official release, and
+any portion of any of these.
+
+"Official Release" means a compiled build of the Software published by the
+Licensors on the GitHub Releases page of https://github.com/rylaix/Lycoreia
+or on another channel the Licensors name as official.
+
+"Contribution" means anything you submit to the Licensors for possible
+inclusion in the Software, including pull requests, patches, issue text,
+logs, screenshots and suggestions.
+
+2. What you may do
+
+Subject to the conditions of this License, the Licensors grant you a
+personal, revocable, non-exclusive, non-transferable, non-sublicensable
+permission to:
+
+  (a) download Official Releases from an official channel and install and
+      run them for your own personal, non-commercial play of Slime Rancher 2,
+      including in multiplayer sessions with other people who obtained the
+      Software the same way;
+
+  (b) view the source code in this repository;
+
+  (c) create a fork of this repository on GitHub, and modify and build your
+      copy of the source code, solely to prepare, test and submit a pull
+      request or a bug report to the Licensors. Your fork must stay on
+      GitHub, must keep this License and all notices, and may not be used
+      for any other purpose;
+
+  (d) report bugs and request features through the issue tracker of this
+      repository; and
+
+  (e) quote short excerpts of the source code in a bug report, pull request
+      or discussion about the Software addressed to the Licensors.
+
+The forking right in (c) exists to make contributions possible and to
+respect GitHub's Terms of Service; it is not permission to publish,
+maintain or distribute a separate version of the Software.
+
+3. What you may not do
+
+Except as expressly permitted in Section 2, you may not, and may not help
+or allow anyone else to:
+
+  (a) copy, reproduce, mirror or re-upload the Software or any part of it,
+      in source or compiled form, on any website, mod hosting service,
+      package registry, file share, Discord server or other channel;
+
+  (b) modify the Software or create derivative works of it, including other
+      mods, forks, ports, translations into other programming languages,
+      "lite"/"plus"/"fixed" editions, repacks, or bundles that include the
+      Software;
+
+  (c) use the Software, its source code, architecture, protocol, file
+      formats, documentation or any part of them to build, improve or
+      operate any other mod, tool, server or product, in particular any
+      multiplayer or co-op mod for Slime Rancher 2 or any other game that
+      competes with Lycoreia;
+
+  (d) sell, rent, lease, sublicense or otherwise commercially exploit the
+      Software, or offer it as part of a paid product, subscription,
+      donation reward or service;
+
+  (e) use the names "Lycoreia", "Lycoreia Multiplayer", the Lycoreia logos
+      or any confusingly similar name or logo for any other project, or
+      suggest that a project is made, endorsed or approved by the Licensors;
+
+  (f) remove, alter or obscure this License, copyright notices or any
+      author attribution in the Software;
+
+  (g) circumvent or disable any version check, compatibility check or other
+      technical measure in the Software; or
+
+  (h) use the Software or its source code to train, fine-tune or evaluate
+      machine-learning or AI models, or include it in datasets.
+
+4. Contributions
+
+By submitting a Contribution you confirm that it is your own original work,
+or that you have the right to submit it, and that it is not copied from any
+other mod or project.
+
+You grant the Licensors a perpetual, worldwide, irrevocable, royalty-free,
+fully paid-up license, with the right to sublicense through multiple tiers,
+to use, copy, modify, publish, distribute, relicense and otherwise exploit
+your Contribution in any way, including under terms other than this
+License, without any obligation to you. You waive, to the extent permitted
+by law, any moral rights in your Contribution that would restrict these
+uses. Submitting a Contribution does not make you an owner of the Software,
+and the Licensors are not required to use, credit or respond to any
+Contribution.
+
+5. Ownership
+
+The Software is licensed, not sold. The Licensors keep all right, title and
+interest in the Software. All rights not expressly granted in this License
+are reserved.
+
+6. Third parties
+
+Slime Rancher 2 and all related names, characters, art and game files are
+the property of Monomi Park. Lycoreia is an unofficial fan-made mod; it is
+not made, endorsed or supported by Monomi Park. Lycoreia does not include
+any game files, and nothing in this License grants rights in them.
+MelonLoader and other tools you install yourself are governed by their own
+licenses.
+
+7. Termination
+
+Your permissions under this License end automatically, without notice, if
+you break any of its terms. When they end you must stop using the Software,
+delete all copies in your possession, including forks and builds, and stop
+any distribution you started. The Licensors may also revoke this License
+for anyone at any time by publishing a new version of it. Sections 3, 4, 5,
+8, 9 and 10 survive termination.
+
+8. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
+THAT IT WILL NOT CORRUPT SAVE FILES OR OTHER DATA. KEEP BACKUPS OF YOUR
+SAVES.
+
+9. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL THE LICENSORS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE SOFTWARE, INCLUDING LOSS OF
+SAVE DATA.
+
+10. General
+
+If any part of this License is held unenforceable, the rest remains in
+effect and that part is enforced to the maximum extent permitted. The
+Licensors' failure to enforce a term is not a waiver of it. This License is
+the entire agreement between you and the Licensors about the Software; it
+can only be changed by the Licensors.
+
+Permissions beyond this License (for example, to stream or record videos
+with the mod, which is welcome, or to feature Lycoreia in a modpack or
+another project) can be requested from the Licensors through the issue
+tracker or the official Discord: https://discord.gg/EvD7WhSwqh
