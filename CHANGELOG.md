@@ -421,18 +421,13 @@ These are open problems in this release. When you report one, please include the
 - Tarr vacuuming is host-confirmed, but Tarr-specific water effects and kills by a guest are not yet synced.
 - Cotton Hunter largo auras can still desync between players.
 - Water "piece" objects that sometimes appear in the world are not yet fixed.
-- Floating carrots after a mass vacuum with a full inventory, and duplicate items from simultaneous vacuums, have fixes in this build that still need confirmation in a full session.
 - Chickens and other animals could still burst after an unusual sequence of sleeps and time jumps. The cap is in place; report any burst with the time.
 - Choppy slime motion during ownership handovers has fixes in this build, but a long session still needs checking for backtracking or duplicates.
 - Cross-island captures without the host present, and harvesting ripe attached fruit from a distance, need a full check.
-- The "Rejected ActorDestroy from a non-owner" log spam has not been confirmed as fixed.
-- Radiant slimes seen as frozen while the host is paused have a fix in this build that is not yet confirmed.
 - Other players' jet (vacuum jetpack) effects are not yet shown.
-- First-person kick legs may not show correctly when looking down. Please report it with a screenshot.
 - Some world effects are not yet synced: conversations, geysers, lightning and tornadoes, cannon fire timers, teleporter effects, plort collectors, auto-feeders, silo slot selection, and drone ammo and explorer resource stores.
 - Remote players' footstep and movement sounds are not played.
 - Shockwave and splash effects are not shown on remote seats.
-- The port mapping release on quit is implemented, but it still needs a check on a real router.
 - Manual internet hosting still needs the port forwarded on the host's router when UPnP and NAT-PMP are not available.
 
 ## [1.0.1] and earlier - 2026-10
