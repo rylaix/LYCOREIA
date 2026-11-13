@@ -63,7 +63,10 @@ namespace Lycoreia.Game.Avatars
             if (!Ready) return;
             _weight = Mathf.MoveTowards(_weight, 1f, dt * 5f);                                   // eases in on the first frames after (re)showing
             var right = _root.right; var (c, n, h) = LookRules.Split(pitch);
-            Bend(_chest, c * _weight, right); Bend(_neck, n * _weight, right); Bend(_head, h * _weight, right);
+            // the bend is relative to the animator's pose: undo last frame's bend first when the animator did not rewrite the bone this
+            // frame (a paused/skipped animator or a rig without head curves made the head turn further every frame: the "head spin")
+            _chestG.Restore(_chest); _neckG.Restore(_neck); _headG.Restore(_head);
+            _chestG.Bend(_chest, c * _weight, right); _neckG.Bend(_neck, n * _weight, right); _headG.Bend(_head, h * _weight, right);
             if (!HasVac) return;
             float s = _root.lossyScale.y; var look = LookRules.LookDir(_root.forward, right, pitch); var up = Vector3.Cross(look, right);
             var sp = _shoulder.position;
@@ -120,8 +123,26 @@ namespace Lycoreia.Game.Avatars
             _lHand.rotation = Quaternion.AngleAxis(Vector3.SignedAngle(curlTo, want, dir), dir) * _lHand.rotation;
         }
 
-        public void Hidden() => _weight = 0f;
+        public void Hidden() { _weight = 0f; _chestG = default; _neckG = default; _headG = default; }
 
-        static void Bend(Transform bone, float degrees, Vector3 axis) { if (bone != null && Math.Abs(degrees) > 0.01f) bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation; }
+        BoneBend _chestG, _neckG, _headG;
+        /// <summary>One procedurally bent bone: remembers the animator's rotation and what we wrote, so a frame the animator skipped is undone, never stacked.</summary>
+        struct BoneBend
+        {
+            Quaternion _base, _written; bool _has;
+            public void Restore(Transform bone)
+            {
+                if (bone == null || !_has) return;
+                if (Quaternion.Angle(bone.localRotation, _written) < 0.01f) bone.localRotation = _base;     // still our value: the animator did not write it
+                _has = false;
+            }
+            public void Bend(Transform bone, float degrees, Vector3 axis)
+            {
+                if (bone == null) return;
+                _base = bone.localRotation;
+                if (Math.Abs(degrees) > 0.01f) bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation;
+                _written = bone.localRotation; _has = true;
+            }
+        }
     }
 }

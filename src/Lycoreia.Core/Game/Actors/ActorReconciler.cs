@@ -206,6 +206,7 @@ namespace Lycoreia.Game
             {
                 if (a.IsGuest && VacuumCapture.Machine.OwnsConsumeRemoval(id)) continue;
                 if (now - MissingClock.FirstSeen(id, now) < ActorCensus.OrphanGraceSeconds || !a.Table.TryGet(id, out var e) || e.IsGadget) continue;
+                if (!GameActorWorld.Instantiable(e.TypeId)) continue;                                   // table-only entry by design (type without prefab)
                 if (e.Owner == a.LocalId) { if (a.PublishDestroy(id)) { published++; Mod.Diagnostics?.Record("actors", "missing-owned-destroyed", $"id={id}; type={e.TypeId}"); } continue; }
                 if (_recreatedAt.TryGetValue(id, out var t) && now - t < 30) continue;
                 _recreatedAt[id] = now; if (_recreatedAt.Count > 4096) _recreatedAt.Clear();
@@ -298,7 +299,18 @@ namespace Lycoreia.Game
                 if (sb.Length > 0) sb.Append(';'); sb.Append(row);
             }
             d.Record("actors", "census-types", $"t={stamp}; part={part}; last=1; " + sb);
+            // issue3/issue4: players rarely send diagnostics.jsonl; the per-type growth goes to latest.log once a minute
+            var byName = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var f in _facts) { string n = f.TypeName ?? "?"; byName.TryGetValue(n, out int c); byName[n] = c + 1; }
+            double now = Time.unscaledTimeAsDouble;
+            if (now >= _nextTypeLog)
+            {
+                _nextTypeLog = now + 60;
+                Log.Info($"[census] actors={_facts.Count} table={Mod.Actors?.Table.Count ?? 0}; " + TypeGrowth.Describe(byName, _lastTypeCounts, 10));
+                _lastTypeCounts = byName;
+            }
         }
+        static double _nextTypeLog; static Dictionary<string, int> _lastTypeCounts;
 #endif
     }
 

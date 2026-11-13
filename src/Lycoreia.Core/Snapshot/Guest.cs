@@ -65,6 +65,9 @@ namespace Lycoreia.Snapshot
             s.ApproveApplied += a => { if (a.SyncId > 0) Buffer.BeginSync(a.SyncId); };
             s.ClientDisconnected += _ => { Buffer.Cancel(); Assembler.Reset(); Applied = false; };
             s.Node.On<InitialActors>(Side.Guest, (c, m) => OnPage(m));
+            // A message to the host was abandoned: the host may lack our change and we may lack its replies. Ask for a full resync
+            // once the join is complete (the host rate-limits client resyncs, so a burst of give-ups costs one snapshot).
+            s.Node.ReliableGaveUp += (p, _) => { if (p.IsHost && Applied && _session.IsGuest) { Log.Warn("a reliable message to the host was lost; requesting a resync"); RequestResync(true); } };
         }
 
         public void RequestResync(bool automatic = false)

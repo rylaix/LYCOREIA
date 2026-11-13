@@ -14,6 +14,12 @@ Made by **[Rylaix](https://github.com/rylaix)** (core developer) and **[Kum1te](
 
 ---
 
+## Testing now: 2.1.0-rc1
+
+A release candidate of 2.1.0 (co-op board, co-op wheel, boost jump and many sync fixes) is out as a diagnostic build. Grab `Lycoreia-2.1.0-rc1.zip` from the Releases page, play with a friend (both need rc1), and send `UserData/Lycoreia/latest.log` and `diagnostics.jsonl` from both players on Discord. See the [changelog](CHANGELOG.md).
+
+---
+
 ## Lycoreia 2.0.0
 
 2.0.0 is a ground-up rewrite: new networking, sessions, world and actor sync, avatars and menus, built

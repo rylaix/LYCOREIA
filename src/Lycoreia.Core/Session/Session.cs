@@ -29,6 +29,8 @@ namespace Lycoreia
         public const int HeartbeatMs = 5000, HostDropMs = 30_000, GuestLossMs = 20_000, AckWithinMs = 10_000, ClosingGraceMs = 3000;
 
         public readonly Node Node; public readonly ModRegistry Mods; readonly Func<long> _clock;
+        /// <summary>Non-null: this install may not host or join (unsupported game build); the text is shown to the player.</summary>
+        public string BlockedReason;
         public bool DevMode; public string ForcedPlayerId; public string LocalName = "Player"; public string Build = ModVersion.Value;
         public bool AllowCheats;                 // host setting, announced in Approve
         public string LocalId { get; private set; }
@@ -62,6 +64,8 @@ namespace Lycoreia
         /// <summary>A player's profile (colour) arrived or changed.</summary>
         public event Action<PlayerInfo> ProfileChanged;
         public event Action<string> Notice;                     // system line for the player
+        /// <summary>Shows a system line to the local player (e.g. the update notice).</summary>
+        public void RaiseNotice(string text) => Notice?.Invoke(text);
         public event Action<string> ErrorShown;                // error text for the player (box / chat)
         public event Action<string> OutboundSystemChat;        // host broadcast mirror
 
@@ -114,6 +118,7 @@ namespace Lycoreia
         }
         public string StartServer(IDatagramTransport t)
         {
+            if (BlockedReason != null) return BlockedReason;
             if (IsGuest) return "Cannot host while connected to another world.";
             if (IsHost) return "A server is already running.";
             LocalId = Identity.ForHost(DevMode); HostId = LocalId; _gen++;
@@ -145,7 +150,8 @@ namespace Lycoreia
         {
             var peer = c.Sender;
             if (string.IsNullOrEmpty(m.PlayerId) || !m.PlayerId.StartsWith(Identity.Prefix, StringComparison.Ordinal)) { Deny(peer, "Invalid player id."); return; }
-            if (m.Build != Build) { Deny(peer, $"Version mismatch: the host runs Lycoreia {Build}, you run {m.Build}."); return; }
+            var mismatch = VersionCheck.DescribeBuildMismatch(Build, m.Build);
+            if (mismatch != null) { Deny(peer, mismatch); return; }
             if (peer.Registered) Log.Warn($"{m.PlayerId} sent Connect again from the same endpoint; keeping its entry");
             var other = Node.FindByPlayer(m.PlayerId);
             if (other != null && other != peer) { Log.Warn($"replacing stale connection of {m.PlayerId}", LogTarget.Main); RemoveClient(other, "replaced"); }
@@ -314,6 +320,7 @@ namespace Lycoreia
         /// <summary>Connect through a ready transport (also used by tests).</summary>
         public string ConnectVia(IDatagramTransport t, EndPoint hostEp)
         {
+            if (BlockedReason != null) return BlockedReason;
             if (IsHost) return "You are hosting a world; stop it before connecting.";
             if (Connecting || Connected) return "Already connecting or connected.";
             int gen = ++_gen; _errorShown = false; _faultScheduled = false; _timeoutPosted = false; _lossPosted = false;

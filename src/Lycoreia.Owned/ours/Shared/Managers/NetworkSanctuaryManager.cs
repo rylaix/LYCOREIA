@@ -34,8 +34,14 @@ internal static class NetworkSanctuaryManager
     internal static InitialSanctuaryStatePacket CreateSnapshot()
     {
         var packet = new InitialSanctuaryStatePacket();
+        // issue4: a resync served while the host sat in the main menu (no GameModel) threw here; send an empty state instead
+        if (GameState == null)
+            return packet;
+        var rooms = GameState.AllSanctuaryRooms();
+        if (rooms == null)
+            return packet;
 
-        foreach (var pair in GameState.AllSanctuaryRooms())
+        foreach (var pair in rooms)
         {
             if (pair.value == null)
                 continue;

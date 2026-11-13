@@ -70,7 +70,8 @@ namespace Lycoreia.Game.Avatars
                         if (best == null) continue;
                         foreach (var image in pair.Value.GetComponentsInChildren<Image>(true)) if (image != null) image.color = best.Colour;
                     }
-                    catch (Exception e) { Rl.Warn("gps-tint", "compass tint: " + e.Message); }
+                    // a radar entry whose tracked object was destroyed throws inside its own WorldPosition (DOTween DOMoveZ): skip it quietly
+                    catch (Exception e) { if ((e.Message ?? "").Contains("NullReference")) continue; Rl.Warn("gps-tint", "compass tint: " + e.Message); }
                 }
             }
         }

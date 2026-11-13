@@ -117,9 +117,14 @@ namespace Lycoreia.Game.Hooks
                 var rc = actorObj.GetComponent<ResourceCycle>(); bool rotten = rc != null && rc.GetState() == ResourceCycle.State.ROTTEN;
                 if (Lycoreia.Owned.ActorDestroyPolicy.IsLocalOnlyRottenResourceCleanup(true, true, owned, rotten)) { Note("destroy-local-rotten", id, e, source, actorObj); ActorRuntime.Forget(id); return true; }   // stale rotten visual: local, no message
                 if (!e.IsGadget && VacuumCapture.AllowConsumeDestroy(id)) { Note("destroy-consume", id, e, source, actorObj); return true; }                       // awaited native consume: held until the host commits
+                if (!e.IsGadget && !owned && SlimeFoodAuthorityHook.HostConsumeDepth > 0 && Mod.Actors.HostConsume(id))
+                {
+                    Note("destroy-host-consume", id, e, source, actorObj); ActorRuntime.Forget(id); return true;                                             // host slime ate a guest's food: gone everywhere
+                }
                 if (!e.IsGadget && Lycoreia.Owned.ActorDestroyPolicy.ShouldSuppress(true, true, owned, rotten))
                 {
                     if (_suppressedLogged.Count < 4096 && _suppressedLogged.Add(id)) Note("destroy-suppressed", id, e, source, actorObj);                      // once per actor: some sources retry every frame
+                    if (GameActorWorld.IsTarr(actorObj) && !GameActorWorld.IsCullSource(source) && Mod.Actors.RequestKill(id)) Note("destroy-kill-requested", id, e, source, actorObj);   // a non-owner killed a Tarr: the owner runs the destroy
                     return false;                                                                                                                              // non-owner: suppressed
                 }
                 Note("destroy-published", id, e, source, actorObj);
@@ -183,6 +188,7 @@ namespace Lycoreia.Game.Hooks
                 if (__result == null || actorModel == null || Mod.Actors == null || !Mod.IsNetworkActive) return;
                 long id = actorModel.actorId.Value;
                 if (!Mod.Actors.Table.TryGet(id, out var e) || e.IsGadget || e.Owner == Mod.LocalId) return;
+                if (RingtailStatues.Links.IsStone(id)) { RingtailStatues.AfterReplicaInstantiated(id); return; }   // another seat holds it as a statue
                 if (ActorRuntime.Motion.IsPredicted(id)) return;
                 ReplicaBodies.Apply(id, e, false);
                 Mod.Actors.ReplayProduceState(id);

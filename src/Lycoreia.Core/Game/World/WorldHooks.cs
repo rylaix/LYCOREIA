@@ -26,11 +26,35 @@ namespace Lycoreia.Game.World
             catch (Exception e) { HookGuard.Fail("WorldStatePrimarySwitch.SetStateForAll", e); }
         }
     }
+    /// <summary>2.1: invisible (trigger volume) switches change their model through their own SetStateForAll, never the primary switch's.</summary>
+    [HarmonyPatch(typeof(Il2CppMonomiPark.SlimeRancher.World.WorldStateInvisibleSwitch), nameof(Il2CppMonomiPark.SlimeRancher.World.WorldStateInvisibleSwitch.SetStateForAll))]
+    static class InvisibleSwitchStateHook
+    {
+        static void Postfix(Il2CppMonomiPark.SlimeRancher.World.WorldStateInvisibleSwitch __instance)
+        {
+            try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Switches.OnModelChanged(__instance._model); }
+            catch (Exception e) { HookGuard.Fail("WorldStateInvisibleSwitch.SetStateForAll", e); }
+        }
+    }
     [HarmonyPatch(typeof(WorldSwitchModel), nameof(WorldSwitchModel.NotifyParticipants))]
     static class SwitchNotifyHook { static void Postfix(WorldSwitchModel __instance) { if (WH.On) WorldRuntime.Switches.OnModelChanged(__instance); } }
 
     [HarmonyPatch(typeof(AccessDoorModel), nameof(AccessDoorModel.NotifyParticipants))]
     static class DoorNotifyHook { static void Postfix(AccessDoorModel __instance) { if (WH.On) WorldRuntime.Doors.OnModelChanged(__instance); } }
+    /// <summary>
+    /// Every gameplay door change goes through AccessDoor.CurrState (xref 2026-11-12: AccessDoorUIActivator.OnPurchaseMenuResult/OnInteract =
+    /// ranch expansions, PuzzleDoorLock.NotifySlotChanged, PuzzleGateActivator = gates). AccessDoorModel.NotifyParticipants is only called by
+    /// GameModel.RegisterDoor at load, so before 2.1 opened gates and bought expansions were never sent.
+    /// </summary>
+    [HarmonyPatch(typeof(Il2CppMonomiPark.World.AccessDoor), nameof(Il2CppMonomiPark.World.AccessDoor.CurrState), MethodType.Setter)]
+    static class DoorStateHook
+    {
+        static void Postfix(Il2CppMonomiPark.World.AccessDoor __instance)
+        {
+            try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Doors.OnModelChanged(__instance._model); }
+            catch (Exception e) { HookGuard.Fail("AccessDoor.CurrState", e); }
+        }
+    }
 
     [HarmonyPatch(typeof(PuzzleSlotModel), nameof(PuzzleSlotModel.NotifyParticipants))]
     static class SlotNotifyHook { static void Postfix(PuzzleSlotModel __instance) { if (WH.On) WorldRuntime.Slots.OnModelChanged(__instance); } }
@@ -40,6 +64,24 @@ namespace Lycoreia.Game.World
 
     [HarmonyPatch(typeof(PrismaBarrierModel), nameof(PrismaBarrierModel.NotifyParticipants))]
     static class BarrierNotifyHook { static void Postfix(PrismaBarrierModel __instance) { if (WH.On) WorldRuntime.Barriers.OnModelChanged(__instance); } }
+
+    // 2.1 (xref 2026-11-12): the model NotifyParticipants above runs only at registration (GameModel.Register*); gameplay changes
+    // go through the scene objects below, so before 2.1 filled plort statue doors, puzzle slots and barrier activations were never sent.
+    [HarmonyPatch(typeof(Il2Cpp.PlortDepositor), nameof(Il2Cpp.PlortDepositor.OnFilledChanged))]
+    static class DepositorFilledHook { static void Postfix(Il2Cpp.PlortDepositor __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Depositors.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PlortDepositor.OnFilledChanged", e); } } }
+    [HarmonyPatch(typeof(Il2Cpp.PuzzleSlot), nameof(Il2Cpp.PuzzleSlot.OnFilledChanged))]
+    static class SlotFilledChangedHook { static void Postfix(Il2Cpp.PuzzleSlot __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Slots.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PuzzleSlot.OnFilledChanged", e); } } }
+    // 2.1.1 (disassembly 2026-11-13): a plort entering a depositor/slot is handled in OnTriggerEnter, which writes the model's amount/filled
+    // inline and calls the lock's NotifySlotChanged; it never calls OnFilledChanged (that runs only from InitLock/the model). So a local fill
+    // was never published, and doors driven by a lock without an AccessDoor (animator "porthole" doors) never opened on the other seat.
+    [HarmonyPatch(typeof(Il2Cpp.PlortDepositor), nameof(Il2Cpp.PlortDepositor.OnTriggerEnter))]
+    static class DepositorTriggerHook { static void Postfix(Il2Cpp.PlortDepositor __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Depositors.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PlortDepositor.OnTriggerEnter", e); } } }
+    [HarmonyPatch(typeof(Il2Cpp.PuzzleSlot), nameof(Il2Cpp.PuzzleSlot.OnTriggerEnter))]
+    static class SlotTriggerHook { static void Postfix(Il2Cpp.PuzzleSlot __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Slots.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PuzzleSlot.OnTriggerEnter", e); } } }
+    [HarmonyPatch(typeof(Il2CppMonomiPark.SlimeRancher.Labyrinth.PrismaBarrier), nameof(Il2CppMonomiPark.SlimeRancher.Labyrinth.PrismaBarrier.SetActivationTime))]
+    static class BarrierActivationHook { static void Postfix(Il2CppMonomiPark.SlimeRancher.Labyrinth.PrismaBarrier __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Barriers.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PrismaBarrier.SetActivationTime", e); } } }
+    [HarmonyPatch(typeof(Il2CppMonomiPark.SlimeRancher.Labyrinth.PrismaBarrier), nameof(Il2CppMonomiPark.SlimeRancher.Labyrinth.PrismaBarrier.Activate))]
+    static class BarrierActivateHook { static void Postfix(Il2CppMonomiPark.SlimeRancher.Labyrinth.PrismaBarrier __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Barriers.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PrismaBarrier.Activate", e); } } }
 
     /// <summary>After a fill, locks re-evaluate explicitly (a depositor or slot state can arrive before its lock exists).</summary>
     [HarmonyPatch(typeof(Il2Cpp.PuzzleSlot), nameof(Il2Cpp.PuzzleSlot.OnFilledChangedFromModel))]

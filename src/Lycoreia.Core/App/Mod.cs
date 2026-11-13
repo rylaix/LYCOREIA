@@ -26,6 +26,13 @@ namespace Lycoreia
         public static ChatDedup Chat { get; } = new ChatDedup();
         public static string DataFolder { get; private set; }
         public static bool Initialised => Session != null;
+        /// <summary>Game version as reported by Unity (e.g. "1.3.0 [build]"), and a user-facing warning when it is not the supported one.</summary>
+        public static string GameVersion { get; internal set; } = "";
+        public static string GameVersionWarning { get; internal set; }
+        /// <summary>Result of the startup update check (null until it finished; Kind Unknown when no source answered).</summary>
+        public static UpdateStatus Update { get; internal set; }
+        /// <summary>Older game builds are not supported: multiplayer is blocked and the menu only explains why.</summary>
+        public static bool GameUnsupported { get; internal set; }
 
         public static bool IsHost => Session != null && Session.IsHost;
         public static bool IsGuest => Session != null && Session.IsGuest;
@@ -64,7 +71,7 @@ namespace Lycoreia
         /// <summary>Quit order: log, (Discord shut down by the caller), UPnP release blocking up to 8 s, close server, disconnect client, flush diagnostics.</summary>
         public static void Quit(Action shutdownDiscord = null)
         {
-            Log.Info("application quitting"); Diagnostics?.Record("runtime", "application-quitting", "shutdown requested");
+            Log.Info("application quitting"); Watchdog.Stop(); Diagnostics?.Record("runtime", "application-quitting", "shutdown requested");
             try { shutdownDiscord?.Invoke(); } catch (Exception e) { Log.Warn("discord shutdown: " + e.Message); }
             AutoHost?.ReleaseBlocking();
             Session?.StopServer();

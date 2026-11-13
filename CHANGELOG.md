@@ -1,5 +1,48 @@
 # Changelog
 
+## [2.1.0-rc1] - 2026-11-13 (release candidate, testers wanted)
+
+This is a test build of 2.1.0, shipped only as the diagnostic (deeplog) build so we can fix what you find. Every player in a session needs 2.1.0-rc1: it refuses 2.0.x and any other build.
+
+**Please send logs.** After a session, send `UserData/Lycoreia/latest.log` and `UserData/Lycoreia/diagnostics.jsonl` from **both** players (host and guest) on our Discord, with a short note of what went wrong and roughly when.
+
+Please especially try:
+- The round doors next to plort statues (deposit plorts, check the door opens for your friend too).
+- Killing Tarrs: both players should be able to kill any Tarr.
+- Harvesting fruit trees together: fruit should never stay floating in the air for the other player.
+- The co-op wheel (hold the middle mouse button) and expeditions.
+
+### New
+- Boost jump: players are solid now (the body is exactly the size of the player). Stand on a friend and jump to reach far higher.
+- Co-op wheel: hold the middle mouse button while looking at a corral, garden, silo, plot, Gordo or any spot to pin a job or leave a note there. A short tap still pings.
+- Co-op board (Pause > Multiplayer > Co-op board):
+  - Jobs: pin jobs for each other, claim them, tick them off. Jobs pinned at a place show on the compass and above the spot.
+  - Expeditions: timed team goals (Plort Rush, Wild Roundup, Gordo Feast, Harvest Run, Treasure Trail, Market Day). Three are on offer at a time; a finished one comes back later with a bigger goal and reward. The goal grows with the team; finishing pays the shared ranch.
+  - Slime notes: leave a note on a corral or a Gordo; everyone sees it floating above it.
+  - Recap: what everyone did this session. The main menu shows the last session's recap after you leave.
+  - Jobs, notes and expedition history are kept with the host's save.
+- "What's new" button in the Lycoreia menu.
+- Update notice: Lycoreia tells you when GitHub or Nexus Mods has a newer version, or when you run a build newer than the public one.
+- Option "Check For Updates" in the settings.
+
+### Fixed
+- Silos, corral plort collectors and auto-feeders sync; collectors no longer double plorts.
+- Gates, ranch expansions, plort statue doors, puzzle slots, prisma barriers and trigger switches opened by one player open for everyone.
+- Corrals and plot upgrades from saves made before playing together appear for the guest.
+- Ringtails no longer multiply at dawn and dusk.
+- Food eaten by a slime disappears for everyone (no endless chickens).
+- Tarrs can be killed by either player, not only by the one whose game controls them.
+- Fruit harvested by one player no longer floats in the air for the other.
+- Remote players' heads no longer spin; avatars no longer spin during short lag.
+- The host returning to the main menu ends the session.
+- Typing a note or chat message no longer drives the game's pause menu (it could quit to the main menu).
+- Error spam near unloaded doors; plorts can no longer appear slime-sized.
+
+### Known issues
+- The door, Tarr and fruit fixes are new in this build and not yet confirmed in real sessions; that is what this release candidate is for.
+- Plort collectors only run while the host has that plot loaded.
+- The guest's expedition timer uses the guest's clock.
+
 ## [2.0.0] - 2026-11-08
 
 Lycoreia 2.0.0 is a ground-up rewrite of the co-op mod by Rylaix (core developer) and Kum1te (core QA). The networking, session, actor, world and menu code of 1.x has been replaced with new systems written from scratch. Lycoreia no longer needs Starlight, installs as a plain MelonLoader mod, and uses a new wire protocol, so every player must run the same 2.0.0 build. Players on 1.x cannot join 2.0.0 sessions.

@@ -13,7 +13,7 @@ namespace Lycoreia.Owned.Components.UI;
 /// Opened from the launcher button on the main menu and pause menu. Driven every frame by
 /// <see cref="MultiplayerUI"/> through <see cref="Tick"/>.
 /// </summary>
-internal sealed class LycoreiaMenu
+internal sealed partial class LycoreiaMenu
 {
     private enum Page : byte
     {
@@ -22,6 +22,9 @@ internal sealed class LycoreiaMenu
         Host,
         Settings,
         WidescreenFov,
+        Coop,
+        WhatsNew,
+        Recap,
     }
 
     private enum ColorMode : byte
@@ -198,6 +201,7 @@ internal sealed class LycoreiaMenu
 
     internal void Close()
     {
+        InputGate.Typing(false, false);
         if (!_isOpen)
             return;
         try
@@ -292,6 +296,7 @@ internal sealed class LycoreiaMenu
     {
         FitToScreen();
         KeepInputFocus();
+        InputGate.Typing(IsTyping(), false);                                                    // 2.1: keys typed here never reach the game or the pause menu
         UpdateFocusHighlight();
         UpdatePickerDrag();
 
@@ -431,7 +436,7 @@ internal sealed class LycoreiaMenu
         var players = string.Join(",", Roster.GetAllPlayers().Select(p => p.Username));
         return $"{page}|{joinByCode}|{InGame}|{ModFacade.Client.IsConnecting}|{ModFacade.Client.IsConnected}|" +
                $"{ModFacade.Server.IsRunning}|{players}|{ui?.HostJoinCode}|{ui?.IsHostAutoInProgress}|" +
-               $"{ui?.HostAutoStage}|{ui?.HostAutoError}|{ui?.NativeLastError}|{notice}|{DirectLaunch.StatusText}|{DirectLaunch.LastError}";
+               $"{ui?.HostAutoStage}|{ui?.HostAutoError}|{ui?.NativeLastError}|{notice}|{DirectLaunch.StatusText}|{DirectLaunch.LastError}|{Lycoreia.Mod.Update?.Kind}|{CoopSignature()}";
     }
 
     [HideFromIl2Cpp]
@@ -509,9 +514,25 @@ internal sealed class LycoreiaMenu
     {
         var rows = new List<UiNode>();
         rows.Add(Title($"{BuildInfo.Name} {BuildInfo.Version}"));
+        if (Lycoreia.Mod.GameVersionWarning is { } versionWarning)
+            rows.Add(Label(versionWarning, UiColor.TextWarning));
+        if (Lycoreia.Mod.Update is { Kind: Lycoreia.UpdateKind.UpdateAvailable or Lycoreia.UpdateKind.AheadOfPublic } update)
+        {
+            rows.Add(Label(update.Message, UiColor.TextWarning));
+            if (update.Kind == Lycoreia.UpdateKind.UpdateAvailable)
+                foreach (var source in update.Offering)
+                {
+                    var url = source.Url;
+                    rows.Add(Button("Open " + source.Source, () => UnityEngine.Application.OpenURL(url), alternative: true));
+                }
+        }
 
         var ui = MultiplayerUI.Instance;
-        if (!ui)
+        if (Lycoreia.Mod.GameUnsupported)
+        {
+            // unsupported game build: only the explanation and Close (no name field, host or join)
+        }
+        else if (!ui)
         {
             rows.Add(Label("The multiplayer UI is still starting. Try again in a moment."));
         }
@@ -522,6 +543,18 @@ internal sealed class LycoreiaMenu
         else if (page == Page.Settings || ui!.IsFirstTimeSetup)
         {
             AddSettingsPage(rows, ui!);
+        }
+        else if (page == Page.WhatsNew)
+        {
+            AddWhatsNewPage(rows);
+        }
+        else if (page == Page.Recap)
+        {
+            AddRecapPage(rows);
+        }
+        else if (page == Page.Coop && Lycoreia.Mod.IsNetworkActive && InGame)
+        {
+            AddCoopPage(rows);
         }
         else if (ModFacade.Client.IsConnecting)
         {
@@ -603,6 +636,7 @@ internal sealed class LycoreiaMenu
         rows.Add(Button("Host a world", () => Navigate(Page.Host)));
         rows.Add(Button("Join a friend", () => Navigate(Page.Join)));
         AddError(rows, DirectLaunch.LastError);
+        AddWhatsNewAndRecapButtons(rows);
         rows.Add(Button("Settings", () => Navigate(Page.Settings), alternative: true));
     }
 
@@ -713,6 +747,7 @@ internal sealed class LycoreiaMenu
         rows.Add(Label("Joining replaces this save with the host's world. Use an empty save to join.",
             UiColor.TextWarning));
         AddError(rows, DirectLaunch.LastError);
+        AddWhatsNewAndRecapButtons(rows);
         rows.Add(Button("Settings", () => Navigate(Page.Settings), alternative: true));
     }
 
@@ -802,6 +837,7 @@ internal sealed class LycoreiaMenu
         }
 
         AddPlayers(rows);
+        if (InGame) rows.Add(Button("Co-op board: jobs, notes, expeditions", () => Navigate(Page.Coop)));
         rows.Add(Button("Resync everyone", () =>
         {
             ModFacade.Server.ReSyncManager.SynchronizeAll();
@@ -816,6 +852,7 @@ internal sealed class LycoreiaMenu
     {
         rows.Add(Heading("Connected"));
         AddPlayers(rows);
+        if (InGame) rows.Add(Button("Co-op board: jobs, notes, expeditions", () => Navigate(Page.Coop)));
         rows.Add(Button("Request resync", () =>
         {
             ModFacade.Server.ReSyncManager.RequestResync();

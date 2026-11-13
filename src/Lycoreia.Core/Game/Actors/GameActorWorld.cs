@@ -33,15 +33,27 @@ namespace Lycoreia.Game
         static Quaternion Q(Quat q) => new Quaternion(q.X, q.Y, q.Z, q.W);
         internal static Vec3 W(Vector3 v) => new Vec3(v.x, v.y, v.z);
 
+        static readonly RateLimitedLog Rl = new RateLimitedLog(null, 10_000);
         public bool TypeKnown(int typeId) => ActorTypes.TryGetType(typeId, out _);
 
         public bool CreateReplica(ActorEntry e)
         {
-            InternalDepth++;
+            InternalDepth++; bool existed = true;
             try
             {
                 if (!ActorTypes.TryGetType(e.TypeId, out var type)) return false;
+                if (!HasPrefab(type))
+                {
+                    // Issue 2026-11-09: a type without a prefab threw "The Object you want to instantiate is null" after the model was
+                    // already created. That leaked a model, failed every snapshot (guest gave up after 2 resyncs with a half-built world),
+                    // and made the host reject the owner's spawn and destroy the real actor at its origin. Keep a table-only entry instead:
+                    // ownership, poses and destroys still apply to the entry, and no other seat ever sees a broken object.
+                    Rl.Warn("no-prefab:" + e.TypeId, $"actor type {SafeName(type)} (type {e.TypeId}) has no prefab on this seat; replica {e.Id} is kept as a table-only entry");
+                    Mod.Diagnostics?.Record("actors", "replica-table-only", $"id={e.Id}; type={e.TypeId}; name={SafeName(type)}");
+                    return true;
+                }
                 var group = SceneGroups.Get(e.Scene); var model = Model; if (model == null || group == null) return false;
+                existed = Find(e.Id) != null;
                 long alloc = ActorReconciler.AllocatorBefore();
                 ActorModel actor;
                 try
@@ -54,8 +66,21 @@ namespace Lycoreia.Game
                 ActorRuntime.Motion.Teleport(e.Id, e.Position, e.Rotation);
                 return true;
             }
-            catch (Exception ex) { Log.Warn($"could not create replica {e.Id}: {ex.Message}"); return false; }
+            catch (Exception ex) { Rl.Warn("replica-failed:" + e.Id, $"could not create replica {e.Id} (type {e.TypeId} {TypeName(e.TypeId)}): {ex.Message}"); if (!existed) RemovePartialModel(e.Id); return false; }
             finally { InternalDepth--; }
+        }
+
+        static bool HasPrefab(IdentifiableType type) { try { return type.prefab != null; } catch { return false; } }
+        static string SafeName(IdentifiableType type) { try { return type.name; } catch { return "?"; } }
+        static string TypeName(int typeId) => ActorTypes.TryGetType(typeId, out var t) ? SafeName(t) : "unknown";
+
+        /// <summary>Whether a replica of this type would get a game object (false: table-only entry, never re-created).</summary>
+        internal static bool Instantiable(int typeId) => ActorTypes.TryGetType(typeId, out var t) && HasPrefab(t);
+
+        /// <summary>A failed instantiation must not leave the model behind: the census would see an unannounced actor every pass.</summary>
+        static void RemovePartialModel(long id)
+        {
+            try { var m = Find(id); if (m != null && m.GetGameObject() == null) Model?.DestroyIdentifiableModel(m); } catch { }
         }
 
         public void DestroyReplica(long actorId)
@@ -123,7 +148,18 @@ namespace Lycoreia.Game
                         // the game's own ripen / edible steps first (they compare against the model's stage, so the model is written after)
                         if (go != null) ProduceLink.SyncStage(go, s.CycleState, s.ActorId);
                         if (model != null && ProduceRules.IsCacheableTime(s.Progress) && model.TryCast<ProduceModel>() is { } pm) pm.Push((ResourceCycle.State)s.CycleState, s.Progress);
-                        if (go != null && float.IsFinite(s.Scale) && s.Scale > 0.01f) go.transform.localScale = Vector3.one * s.Scale;
+                        if (go != null)
+                        {
+                            bool produce = go.GetComponent<ResourceCycle>() != null;
+                            if (ProduceRules.ScaleApplies(produce, s.Scale)) go.transform.localScale = Vector3.one * s.Scale;
+                            else if (!produce)
+                            {
+                                // issue4: a produce scale must never resize a plort or slime that holds this id on this seat
+                                Rl.Warn("state-nonproduce:" + s.ActorId, $"produce state for actor {s.ActorId} ignored: the local object {go.name} is not produce (scale {s.Scale:0.00})");
+                                Mod.Diagnostics?.Record("actors", "produce-state-nonproduce", $"id={s.ActorId}; object={go.name}; scale={s.Scale:0.00}");
+                                break;
+                            }
+                        }
                         if (go != null) ProduceLink.SyncReplica(go, s.Attached, s.ActorId);
                         break;
                     case ActorStateKind.Plort:
@@ -191,6 +227,20 @@ namespace Lycoreia.Game
                 return Ranch.Contains(W(go.transform.position)) == true;
             }
             catch { return false; }
+        }
+
+        public static bool IsTarr(GameObject go)
+        {
+            try { var ident = go != null ? go.GetComponent<IdentifiableActor>() : null; return ident != null && ident.identType != null && (ident.identType.name ?? "").Contains("Tarr", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
+
+        /// <summary>Runs the native destroy of a locally owned actor on behalf of another seat's kill request (the DestroyActor hook then publishes it).</summary>
+        public static bool ExecuteKillRequest(long id)
+        {
+            var go = ObjectOf(id); if (go == null) return false;
+            try { Destroyer.DestroyActor(go, "Lycoreia.remote-kill", true); return true; }
+            catch (Exception e) { Mod.Diagnostics?.Record("actors", "kill-exec-error", $"id={id}; {e.Message}"); return false; }
         }
 
         /// <summary>Native despawn/cull sources that are never gameplay on a ranch (no player, slime or hazard caused them).</summary>

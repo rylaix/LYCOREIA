@@ -16,9 +16,14 @@ namespace Lycoreia.Net
     /// </summary>
     public sealed class Link
     {
-        public const int ResendIntervalMs = 500, GiveUpMs = 10_000, GiveUpLargeMs = 30_000, MaxAttempts = 64;
+        // Reliable means reliable while the peer is alive. Until 2.0.1 a message gave up after 10 s and was silently dropped while the
+        // session stayed up (the host only drops a silent guest after 30 s): on lossy or filtered paths (TSPU, VPN proxies) any blackout
+        // of 10-30 s lost state changes for good (issue 2026-11-09). Now sending outlasts the session's own drop timeout, resends back
+        // off after the first rounds so a blackout does not flood the path, and the receiver waits as long before skipping a gap.
+        public const int ResendIntervalMs = 500, BackoffResendIntervalMs = 1000, FastResendRounds = 6;
+        public const int GiveUpMs = 32_000, GiveUpLargeMs = 45_000, MaxAttempts = 96;
         public const int LargeParts = 32, BurstParts = 24, BurstGapMs = 5;
-        public const int ReorderCap = 4096, GapSkipMs = 12_000, PartialTtlMs = 30_000;
+        public const int ReorderCap = 4096, GapSkipMs = 34_000, PartialTtlMs = 50_000;
         public const long PartialBytesCap = 32L * 1024 * 1024;
         const int DedupWindowMs = 60_000;
 
@@ -340,7 +345,7 @@ namespace Lycoreia.Net
             int n = o.Parts.Length;
             if (o.Cursor < 0)
             {
-                if (now - o.RoundStart < ResendIntervalMs) return;
+                if (now - o.RoundStart < (o.Attempts < FastResendRounds ? ResendIntervalMs : BackoffResendIntervalMs)) return;
                 o.RoundStart = now; o.Cursor = 0; o.Attempts++; o.NextBurst = now;
                 if (o.Large) o.Offset = (o.Offset + BurstParts * 7 + 1) % n; // different starting part each attempt
             }

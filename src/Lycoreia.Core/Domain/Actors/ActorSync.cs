@@ -65,6 +65,7 @@ namespace Lycoreia.Actors
             });
             n.On<ActorUnload>(Side.Host, HostUnload); n.On<ActorUnload>(Side.Guest, (c, m) => Guest(ActorDeltaKind.ActorUnload, m.ActorId, m.Rev, m, null, GuestUnload));
             n.On<CaptureAbort>(Side.Host, HostCaptureAbort);
+            n.On<ActorKillRequest>(Side.Host, HostKillRequest); n.On<ActorKillRequest>(Side.Guest, (c, m) => { GuestKillRequest(m); });
             s.ClientRemoved += OnClientRemoved;
             s.ServerStarted += Reset; s.ClientDisconnected += _ => Reset();
         }
@@ -324,8 +325,7 @@ namespace Lycoreia.Actors
             T("destroy-received", $"id={m.ActorId}; owner={e.Owner}; token={m.OwnerToken}; rev={m.Rev.Value}");
             RemoveFromTable(m.ActorId, m.Rev.Value); _w.DestroyReplica(m.ActorId);
             if (!m.Rev.Has) T("spawn-refused", $"id={m.ActorId}; owner={e.Owner}");                  // a direct (unstamped) destroy is the host refusing our spawn
-            OnGuestSpawnRefused(m.ActorId);                                  // the spawn budget treats a destroy of our own fresh spawn as a host refusal
-            Backoff.OnHostRefusal(m.ActorId, _now());
+            if (!m.Rev.Has) { OnGuestSpawnRefused(m.ActorId); Backoff.OnHostRefusal(m.ActorId, _now()); }   // only a direct (unstamped) destroy is a refusal of our spawn; a stamped one (consume, cleanup) is not
             return true;
         }
 
@@ -426,6 +426,63 @@ namespace Lycoreia.Actors
             return true;
         }
 
+        // ----------------------------------------------------------------- kill requests (non-owner killed a Tarr)
+        /// <summary>Game layer: run the native destroy of an actor this seat owns; false when the object is not here.</summary>
+        public Func<long, bool> ExecuteKill = id => false;
+        readonly Dictionary<long, double> _killAsked = new Dictionary<long, double>();
+
+        /// <summary>Where a non-owner's kill request goes: the owner is reached through the host. None when this seat owns it, it is unknown or a gadget.</summary>
+        public enum KillRoute { None, ToHost, ToOwner, RunHere }
+        public KillRoute RouteKill(long actorId)
+        {
+            if (!Table.TryGet(actorId, out var e) || e.IsGadget) return KillRoute.None;
+            if (e.Owner == Me) return KillRoute.None;
+            if (_s.IsHost) return string.IsNullOrEmpty(e.Owner) ? KillRoute.RunHere : KillRoute.ToOwner;
+            return _s.IsGuest ? KillRoute.ToHost : KillRoute.None;
+        }
+
+        /// <summary>A non-owner's native destroy of a killable actor was suppressed: ask the owner to destroy it (at most once a second per actor).</summary>
+        public bool RequestKill(long actorId)
+        {
+            double now = _now();
+            if (_killAsked.TryGetValue(actorId, out var at) && now - at < 1.0) return false;
+            var route = RouteKill(actorId); if (route == KillRoute.None) return false;
+            _killAsked[actorId] = now;
+            var m = new ActorKillRequest { ActorId = actorId, RequesterId = Me };
+            T("kill-request", $"id={actorId}; route={route}; owner={(Table.TryGet(actorId, out var e) ? e.Owner : "?")}");
+            switch (route)
+            {
+                case KillRoute.ToHost: _s.Node.SendToHost(m); return true;
+                case KillRoute.ToOwner: { var p = _s.Node.FindByPlayer(e.Owner); if (p == null) return false; _s.Node.SendTo(p, m); return true; }
+                default: return RunKill(actorId, Me);
+            }
+        }
+
+        Verdict HostKillRequest(Ctx c, ActorKillRequest m)
+        {
+            if (!Table.TryGet(m.ActorId, out var e) || e.IsGadget) return Verdict.Reject;
+            if (e.Owner == c.SenderId) return Verdict.Reject;                                                   // the owner kills by itself
+            if (e.Owner == Me || string.IsNullOrEmpty(e.Owner)) { RunKill(m.ActorId, c.SenderId); return Verdict.Accept; }
+            var p = _s.Node.FindByPlayer(e.Owner);
+            if (p == null) { T("kill-request-orphan", $"id={m.ActorId}; owner={e.Owner}; from={c.SenderId}"); HostForceDestroy(m.ActorId); return Verdict.Accept; }
+            _s.Node.SendTo(p, m); T("kill-request-forwarded", $"id={m.ActorId}; owner={e.Owner}; from={c.SenderId}");
+            return Verdict.Accept;
+        }
+
+        void GuestKillRequest(ActorKillRequest m)
+        {
+            if (!Table.TryGet(m.ActorId, out var e) || e.Owner != Me) { T("kill-request-ignored", $"id={m.ActorId}; owner={(Table.TryGet(m.ActorId, out var x) ? x.Owner : "?")}"); return; }
+            RunKill(m.ActorId, m.RequesterId);
+        }
+
+        bool RunKill(long id, string from)
+        {
+            bool ran = false; try { using (Applying.Suspend()) ran = ExecuteKill(id); } catch { }          // lifted: the native destroy must be seen and published by the DestroyActor hook
+            if (!ran && _s.IsHost && Table.TryGet(id, out var e) && string.IsNullOrEmpty(e.Owner)) ran = HostForceDestroy(id);      // unowned entry without an object here
+            T(ran ? "kill-executed" : "kill-failed", $"id={id}; from={from}");
+            return ran;
+        }
+
         /// <summary>Owner transform sample; sent when changed, else every 10th tick as keep-alive staggered by id.</summary>
         public static bool ShouldSendTransform(bool changed, long tick, long actorId) => changed || (tick + (actorId % 10)) % 10 == 0;
 
@@ -460,6 +517,18 @@ namespace Lycoreia.Actors
             if (!_s.IsHost || !Table.TryGet(actorId, out var e)) return false;
             var m = new ActorDestroy { ActorId = actorId, OwnerToken = e.IsGadget ? "" : e.Owner ?? "", Rev = Stamp() };
             RemoveFromTable(actorId, m.Rev.Value); _w.DestroyReplica(actorId); _s.Node.SendToAll(m);
+            return true;
+        }
+
+        /// <summary>
+        /// Host only: a host-simulated slime ate another seat's food. The native destroy of the local object proceeds; the table entry goes and
+        /// every seat (the food's owner included: the token is its own id) removes the food. Never during a capture reservation.
+        /// </summary>
+        public bool HostConsume(long actorId)
+        {
+            if (!_s.IsHost || !Table.TryGet(actorId, out var e) || e.IsGadget || Captures.HasReservation(actorId)) return false;
+            var m = new ActorDestroy { ActorId = actorId, OwnerToken = e.Owner ?? "", Rev = Stamp() };
+            RemoveFromTable(actorId, m.Rev.Value); _s.Node.SendToAll(m); T("host-consume", $"id={actorId}; owner={e.Owner}");
             return true;
         }
 
@@ -521,17 +590,27 @@ namespace Lycoreia.Actors
         /// <summary>Step 4: spawns the snapshot actors with their owners and epochs.</summary>
         public ApplyOutcome SpawnFromSnapshot(ActorSnapshot snap)
         {
-            bool failure = false;
+            int attempted = 0; var failed = new List<long>();
             foreach (var r in snap.Actors)
             {
                 if (!_w.TypeKnown(r.TypeId) || r.ActorId <= 0) continue;             // expected skip
+                attempted++;
                 var e = new ActorEntry { Id = r.ActorId, Owner = r.OwnerId ?? "", Epoch = r.Epoch, TypeId = r.TypeId, Scene = r.SceneGroup, Position = r.Position, Rotation = r.Rotation, HasSlime = r.HasSlime, Slime = r.Slime, HasMaterial = r.HasMaterial, MaterialIndex = r.MaterialIndex, HasCharge = r.HasCharge, ChargeTime = r.ChargeTime };
                 Table.Add(e); e.Epoch = r.Epoch;
-                try { if (!_w.CreateReplica(e)) { RemoveFromTable(r.ActorId); failure = true; } else _w.ApplyLocalOwnership(e, e.Owner == Me); }
-                catch (Exception ex) { Log.Warn("snapshot actor failed: " + ex.Message); failure = true; }
+                try { if (!_w.CreateReplica(e)) { RemoveFromTable(r.ActorId); failed.Add(r.ActorId); } else _w.ApplyLocalOwnership(e, e.Owner == Me); }
+                catch (Exception ex) { Log.Warn("snapshot actor failed: " + ex.Message); failed.Add(r.ActorId); }
             }
-            return failure ? ApplyOutcome.RuntimeFailure : ApplyOutcome.Success;
+            if (failed.Count == 0) return ApplyOutcome.Success;
+            // Issue 2026-11-09: one deterministic bad record failed the whole snapshot; each retry wiped and rebuilt the world with the
+            // same failures, then the guest aborted and played on a half-built table. A few unbuildable records are not worth that:
+            // only a broad failure (game not ready, model missing) asks the host for a resync.
+            bool broad = SnapshotFailureIsBroad(failed.Count, attempted);
+            Log.Warn($"snapshot: {failed.Count} of {attempted} actors could not be created ({string.Join(", ", failed.Take(8))}{(failed.Count > 8 ? ", ..." : "")}); {(broad ? "requesting a resync" : "continuing without them")}");
+            return broad ? ApplyOutcome.RuntimeFailure : ApplyOutcome.Success;
         }
+
+        /// <summary>A snapshot is retried only when many of its actors failed (at least 4 and more than 5 %).</summary>
+        public static bool SnapshotFailureIsBroad(int failed, int attempted) => failed > 3 && failed * 20 > attempted;
 
         // =================================================================== helpers
         static ActorEntry EntryFrom(ActorSpawn m) => new ActorEntry

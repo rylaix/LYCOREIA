@@ -146,12 +146,20 @@ namespace Lycoreia.Tests
                 r.Step(10); T.True(r.A.DatagramsSent - sent >= 25, "next burst follows");
                 r.Step(1000); T.True(r.A.DatagramsSent - sent >= 100 * 2, "keeps resending: all parts per round");
             });
-            T.Test("link/gives up after 10s (30s for large) or 64 attempts", () =>
+            T.Test("link/gives up after 32s (45s for large), past the session drop timeout", () =>
             {
-                var r = new LinkRig(); r.Cut = true; r.A.Send(5, 0, Delivery.Reliable, new byte[] { 1 });
-                r.Step(9_900); T.Eq(1, r.A.PendingReliable); r.Step(300); T.Eq(0, r.A.PendingReliable); T.Eq(1L, r.A.GaveUp);
+                var r = new LinkRig(); r.Cut = true; int gave = 0; r.A.OnGiveUp += _ => gave++; r.A.Send(5, 0, Delivery.Reliable, new byte[] { 1 });
+                r.Step(31_900); T.Eq(1, r.A.PendingReliable); r.Step(300); T.Eq(0, r.A.PendingReliable); T.Eq(1L, r.A.GaveUp); T.Eq(1, gave, "give-up is reported");
                 var r2 = new LinkRig(); r2.Cut = true; r2.A.Send(5, 0, Delivery.Reliable, Blob(40 * 1200));
-                r2.Step(20_000); T.Eq(1, r2.A.PendingReliable, "large still alive at 20s"); r2.Step(11_000); T.Eq(0, r2.A.PendingReliable);
+                r2.Step(40_000); T.Eq(1, r2.A.PendingReliable, "large still alive at 40s"); r2.Step(6_000); T.Eq(0, r2.A.PendingReliable);
+            });
+            T.Test("link/a 20s blackout loses nothing and resends back off (issue 2026-11-09)", () =>
+            {
+                var r = new LinkRig(); r.Cut = true; r.A.Send(5, 0, Delivery.ReliableOrdered, new byte[] { 1 }); r.A.Send(5, 0, Delivery.ReliableOrdered, new byte[] { 2 });
+                long sent = r.A.DatagramsSent; r.Step(20_000);
+                T.True(r.A.DatagramsSent - sent <= 2 * 26, "backed-off resends during the blackout: " + (r.A.DatagramsSent - sent));
+                r.Cut = false; r.Step(2_000);
+                T.Eq(2, r.AtB.Count, "both delivered after the blackout"); T.Eq(1, (int)r.AtB[0].data[0], "in order"); T.Eq(0L, r.A.GaveUp);
             });
             T.Test("link/ordered: first sequence is 1, late first message not dropped", () =>
             {
@@ -168,13 +176,13 @@ namespace Lycoreia.Tests
                 r.A.Send(7, 4, Delivery.ReliableOrdered, new byte[] { 2 }); r.A.Send(8, 3, Delivery.ReliableOrdered, new byte[] { 3 });
                 r.Step(100); T.Eq(2, r.AtB.Count, "other lane and other type are not blocked");
             });
-            T.Test("link/gap skipped after 12s when sender gave up", () =>
+            T.Test("link/gap skipped after 34s when sender gave up", () =>
             {
                 var r = new LinkRig(); r.Filter = d => { if (Frame.Parse(d, 0, d.Length, out var h) == Frame.ParseResult.Ok && h.Kind == Frame.KindData && h.Ordered && h.Seq == 2) return true; return false; };
                 for (int i = 1; i <= 3; i++) r.A.Send(7, 3, Delivery.ReliableOrdered, new[] { (byte)i });
                 r.Step(100); T.Eq(1, r.AtB.Count, "3 held behind missing 2");
-                r.Step(11_000); T.Eq(0, r.A.PendingReliable, "sender gave up on 2 at 10s"); T.Eq(1, r.AtB.Count, "gap younger than 12s is kept");
-                r.Step(1_500); T.Eq(2, r.AtB.Count, "gap skipped at 12s"); T.Eq((byte)3, r.AtB[1].data[0]);
+                r.Step(33_000); T.Eq(0, r.A.PendingReliable, "sender gave up on 2 at 32s"); T.Eq(1, r.AtB.Count, "gap younger than 34s is kept");
+                r.Step(1_500); T.Eq(2, r.AtB.Count, "gap skipped at 34s"); T.Eq((byte)3, r.AtB[1].data[0]);
             });
             T.Test("link/reorder buffer never drops acknowledged data past 4096", () =>
             {
@@ -193,14 +201,15 @@ namespace Lycoreia.Tests
                 b2.OnDatagram(bad, 0, bad.Length); T.Eq(0, got); T.Eq(1L, b2.BadChecksum);
                 b2.OnDatagram(copy, 0, copy.Length); T.Eq(1, got);
             });
-            T.Test("link/incomplete messages expire after 30s and byte cap holds", () =>
+            T.Test("link/incomplete messages expire after 50s and byte cap holds", () =>
             {
                 var r = new LinkRig(); long now = 0; byte[] first = null; int n = 0;
                 var a = new Link((b, o, l) => { if (n++ == 0) { first = new byte[l]; Buffer.BlockCopy(b, o, first, 0, l); } }, () => now, (t, ln, d, o, l) => { });
                 int got = 0; var rx = new Link((b, o, l) => { }, () => now, (t, ln, d, o, l) => got++);
                 a.Send(1, 0, Delivery.Unreliable, Blob(5000));
                 rx.OnDatagram(first, 0, first.Length); T.True(rx.PartialBytes > 0);
-                now = 31_000; rx.Tick(); T.Eq(0L, rx.PartialBytes);
+                now = 31_000; rx.Tick(); T.True(rx.PartialBytes > 0, "kept while the sender may still resend");
+                now = 51_000; rx.Tick(); T.Eq(0L, rx.PartialBytes);
                 // cap: many 2-part messages with only first part delivered
                 long baseBytes = 0; for (int i = 0; i < 100; i++) { n = 0; a.Send(1, 0, Delivery.Unreliable, Blob(2400, i)); rx.OnDatagram(first, 0, first.Length); }
                 T.True(rx.PartialBytes <= Link.PartialBytesCap);

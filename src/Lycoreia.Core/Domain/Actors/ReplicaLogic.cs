@@ -205,6 +205,82 @@ namespace Lycoreia.Actors
             => tooSmall && !onTree && resting && phase != Phase.Unripe && !beingPulled && !heldKinematic;
         /// <summary>A frozen replica stores an effectively infinite next-cycle time; such a value must never be cached.</summary>
         public static bool IsCacheableTime(double t) => double.IsFinite(t) && t > 0 && t < 1e12;
+        /// <summary>A produce scale from the owner only applies to a local object that really is produce (has a resource cycle).</summary>
+        public static bool ScaleApplies(bool targetHasResourceCycle, float scale) => targetHasResourceCycle && float.IsFinite(scale) && scale > 0.01f && scale < 20f;
+    }
+
+    /// <summary>
+    /// Plorts never grow natively: SlimeEat.Produce tweens a new plort from 0.01 to its spawn scale in 0.5 s, the vacuum only shrinks.
+    /// A plort above its prefab scale is a mod-side corruption (issue4 "slime-sized plort"); it is put back and logged.
+    /// </summary>
+    public static class PlortScaleRule
+    {
+        public const float Tolerance = 1.25f;
+        public static bool IsOversized(float scale, float prefabScale) => prefabScale > 0.001f && float.IsFinite(scale) && scale > prefabScale * Tolerance;
+    }
+
+    /// <summary>
+    /// Ringtail day/night stone form (native TurnToStoneInDaylight.BecomeStatue spawns a statue actor and removes the slime's object,
+    /// keeping its model; RingtailStatue.Unstatue re-creates the slime from that model and destroys the statue). Both run on every
+    /// seat natively, so before 2026-11-12 every seat published its own statue and every statue copy re-created the slime: Ringtails
+    /// multiplied each day/night cycle (issue3). Only the owner of the actor that transforms may run the transformation.
+    /// </summary>
+    public static class StatueRules
+    {
+        /// <summary><paramref name="tracked"/>: the actor has a table entry; untracked actors fall back to the generic behaviour authority.</summary>
+        public static bool MayTransform(bool networked, bool tracked, bool locallyOwned, bool fallback) => !networked || (tracked ? locallyOwned : fallback);
+    }
+
+    /// <summary>
+    /// A slime eats only food its own seat simulates. Native SlimeEat.EatAndProduce destroys the food (Destroyer.DestroyActor) and then
+    /// produces plorts; for food owned by another seat that destroy is suppressed, so before 2026-11-12 the plorts appeared while
+    /// the food (often a chicken shot into a corral by the other player) stayed, and was eaten again and again (issue4 chicken burst,
+    /// actor table +800 in 13 min). Untracked food (local only) is the native case.
+    /// </summary>
+    public static class FoodAuthority
+    {
+        public enum Verdict { Eat, EatHostConsumes, Skip }
+        public static bool MayEat(bool networked, bool foodTracked, bool foodLocallyOwned) => !networked || !foodTracked || foodLocallyOwned;
+        /// <summary>The host is the authority: its slime may eat a guest's food and removes it for everyone; a guest's slime waits for ownership.</summary>
+        public static Verdict Decide(bool networked, bool isHost, bool foodTracked, bool foodLocallyOwned, bool foodReserved)
+            => MayEat(networked, foodTracked, foodLocallyOwned) ? Verdict.Eat : isHost && !foodReserved ? Verdict.EatHostConsumes : Verdict.Skip;
+    }
+
+    /// <summary>Census line for latest.log: the largest types and the ones that grew most since the previous line.</summary>
+    public static class TypeGrowth
+    {
+        public static string Describe(IReadOnlyDictionary<string, int> now, IReadOnlyDictionary<string, int> before, int top)
+        {
+            string Delta(string k) { int d = now[k] - (before != null && before.TryGetValue(k, out var b) ? b : 0); return before == null || d == 0 ? "" : d > 0 ? "(+" + d + ")" : "(" + d + ")"; }
+            var largest = now.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal).Take(top).Select(kv => kv.Key + "=" + kv.Value + Delta(kv.Key));
+            string text = "top " + string.Join(", ", largest);
+            if (before == null) return text;
+            var grew = now.Select(kv => (kv.Key, d: kv.Value - (before.TryGetValue(kv.Key, out var b) ? b : 0))).Where(x => x.d >= 5)
+                          .OrderByDescending(x => x.d).ThenBy(x => x.Key, StringComparer.Ordinal).Take(top).Select(x => x.Key + " +" + x.d).ToList();
+            return grew.Count == 0 ? text : text + "; grew " + string.Join(", ", grew);
+        }
+    }
+
+    /// <summary>Statue actor id to the slime it holds, learned from link messages (replica statue models carry no reference).</summary>
+    public sealed class StatueLinkTable
+    {
+        public const int Cap = 4096;
+        readonly Dictionary<long, long> _slimeOf = new Dictionary<long, long>();
+        readonly Dictionary<long, long> _statueOf = new Dictionary<long, long>();
+        public int Count => _slimeOf.Count;
+        public void Note(long statueId, long slimeId)
+        {
+            if (statueId == 0 || slimeId == 0) return;
+            if (_slimeOf.Count >= Cap && !_slimeOf.ContainsKey(statueId)) Clear();
+            Forget(statueId); if (_statueOf.TryGetValue(slimeId, out var old)) _slimeOf.Remove(old);
+            _slimeOf[statueId] = slimeId; _statueOf[slimeId] = statueId;
+        }
+        public bool TryGet(long statueId, out long slimeId) => _slimeOf.TryGetValue(statueId, out slimeId);
+        /// <summary>The slime is currently held in stone form by a statue (its object must stay hidden on this seat).</summary>
+        public bool IsStone(long slimeId) => _statueOf.ContainsKey(slimeId);
+        public void Forget(long statueId) { if (_slimeOf.Remove(statueId, out var slime) && _statueOf.TryGetValue(slime, out var st) && st == statueId) _statueOf.Remove(slime); }
+        public void Clear() { _slimeOf.Clear(); _statueOf.Clear(); }
+        public IEnumerable<(long statue, long slime)> All() => _slimeOf.Select(kv => (kv.Key, kv.Value));
     }
 
     /// <summary>Per-actor cache of the real produce cycle time across a non-owner freeze; restored when ownership is gained.</summary>

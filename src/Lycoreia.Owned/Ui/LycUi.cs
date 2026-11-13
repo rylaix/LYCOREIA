@@ -281,9 +281,14 @@ internal abstract class UiNode
         }
 
         Rendered = rt;
-        Build(rt);
+        // One widget that cannot be built (e.g. a game build with a different UI API) must not blank the whole panel.
+        try { Build(rt); }
+        catch (System.Exception e) { OwnedLog.LogError($"UI widget {GetType().Name} failed to build: {e.GetType().Name}: {e.Message}"); }
         foreach (var child in Children)
-            child.Render(rt);
+        {
+            try { child.Render(rt); }
+            catch (System.Exception e) { OwnedLog.LogError($"UI widget {child.GetType().Name} failed to render: {e.GetType().Name}: {e.Message}"); }
+        }
         return rt;
     }
 

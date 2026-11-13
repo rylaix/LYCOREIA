@@ -192,4 +192,26 @@ namespace Lycoreia.Net.Messages
         public List<SlimeBehaviorEntry> Entries = new List<SlimeBehaviorEntry>();
         public override void Describe(Codec c) { c.List(ref Entries, Items.Of<SlimeBehaviorEntry>(), 12); }
     }
+
+    /// <summary>
+    /// Ringtail stone form, sent by the seat that ran the native transformation (2026-11-12, issue3). Stone: <see cref="SlimeId"/>
+    /// became statue <see cref="StatueId"/> (others hide their slime object, keep its model). !Stone: the statue released the slime
+    /// (others bring the slime object back from its model; the statue's own destroy arrives as an ActorDestroy).
+    /// </summary>
+    [Msg(65, Direction.Both, Delivery.ReliableOrdered, Lane.ActorCritical)]
+    public sealed class StatueLink : Msg
+    {
+        public long StatueId, SlimeId; public bool Stone;
+        public override void Describe(Codec c) { c.Var(ref StatueId); c.Var(ref SlimeId); c.Flag(ref Stone); }
+    }
+    /// <summary>
+    /// A seat that is NOT the owner of an actor made the game kill it (water, vacuum, hazards on a Tarr) and had its native destroy suppressed:
+    /// it asks the owner (via the host) to run that destroy. The owner's own destroy then publishes the normal ActorDestroy.
+    /// </summary>
+    [Msg(72, Direction.Both, Delivery.ReliableOrdered, Lane.ActorCritical)]
+    public sealed class ActorKillRequest : Msg
+    {
+        public long ActorId; public string RequesterId;
+        public override void Describe(Codec c) { c.Var(ref ActorId); c.Str(ref RequesterId, 64); }
+    }
 }

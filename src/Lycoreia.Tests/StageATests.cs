@@ -22,6 +22,19 @@ namespace Lycoreia.Tests
                 T.False(r.HostSync.Table.TryGet(70, out _), "host table"); foreach (var g in r.G) { T.False(g.sync.Table.TryGet(70, out _), "guest table"); T.Eq(0, g.sync.Table.DeferredCount); }
                 T.False(g0.sync.HostForceDestroy(1), "guests cannot");
             });
+            T.Test("loopback/a non-owner's kill request reaches the owner (host to guest, guest to host, guest to guest) and the owner's destroy replicates", () =>
+            {
+                var r = new ActorRig(2); var g0 = r.G[0]; var g1 = r.G[1]; var ran = new List<string>();
+                r.HostSync.ExecuteKill = id => { ran.Add("H" + id); return r.HostSync.PublishDestroy(id); };
+                g0.sync.ExecuteKill = id => { ran.Add("G0:" + id); return g0.sync.PublishDestroy(id); };
+                g1.sync.ExecuteKill = id => { ran.Add("G1:" + id); return g1.sync.PublishDestroy(id); };
+                var a = r.HostActor(80, r.HostId); r.Share(a); var b = r.HostActor(81, g0.s.LocalId); r.Share(b); var c = r.HostActor(82, g0.s.LocalId); r.Share(c);
+                T.False(r.HostSync.RequestKill(80), "owner never requests");
+                T.True(g1.sync.RequestKill(80)); r.Step(400); T.True(ran.Contains("H80"), "guest -> host owner"); T.False(g1.sync.Table.TryGet(80, out _), "destroy replicated");
+                T.True(r.HostSync.RequestKill(81)); r.Step(400); T.True(ran.Contains("G0:81"), "host -> guest owner"); T.False(r.HostSync.Table.TryGet(81, out _));
+                T.True(g1.sync.RequestKill(82)); r.Step(400); T.True(ran.Contains("G0:82"), "guest -> host -> other guest owner"); T.False(g1.sync.Table.TryGet(82, out _));
+                T.False(g1.sync.RequestKill(999), "unknown actor");
+            });
             T.Test("loopback/owner unload releases the actor on the host and other guests; state reaches non-owners only from the owner", () =>
             {
                 var r = new ActorRig(2); var g0 = r.G[0]; var g1 = r.G[1]; var e = r.HostActor(71, g0.s.LocalId); r.Share(e);

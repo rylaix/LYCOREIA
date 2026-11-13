@@ -127,6 +127,7 @@ namespace Lycoreia.Net
             p = new Peer { EP = ep, IsHost = isHost, CreatedMs = Clock(), LastHeardMs = Clock() };
             p.Link = new Link((b, o, l) => RawSend(p, b, o, l), Clock, (type, lane, d, off, len) => OnMessage(p, type, lane, d, off, len));
             p.Link.OnReject += (t, why) => ReportReject(t, why, p);
+            p.Link.OnGiveUp += t => ReportGiveUp(t, p);
             if (isHost) HostPeer = p;
             _peers[ep] = p;
             PeerAdded?.Invoke(p);
@@ -159,6 +160,17 @@ namespace Lycoreia.Net
             }
             p.LastHeardMs = Clock();
             p.Link.OnDatagram(buf, off, len);
+        }
+
+        /// <summary>Main thread: a reliable message to this peer was abandoned (the peer was unreachable for the whole give-up window).</summary>
+        public event Action<Peer, ushort> ReliableGaveUp;
+
+        // Link.Tick runs on the tick thread under the link lock: log here, hand the event to the main thread.
+        void ReportGiveUp(ushort type, Peer p)
+        {
+            var info = Registry.Get(type);
+            _rl.Warn($"giveup:{p.EP}", $"reliable {(info?.Name ?? "type " + type)} to {(p.PlayerId ?? (p.IsHost ? "host" : "unregistered peer"))} was never acknowledged; state may need a resync");
+            if (ReliableGaveUp != null) _general.Enqueue(() => ReliableGaveUp?.Invoke(p, type));
         }
 
         void ReportReject(ushort type, string why, Peer p)

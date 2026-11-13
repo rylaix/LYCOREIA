@@ -18,7 +18,7 @@ namespace Lycoreia.Players
 
         public void Push(double now, Vec3 pos, float yaw, float pitch)
         {
-            if (!float.IsFinite(pos.X) || !float.IsFinite(pos.Y) || !float.IsFinite(pos.Z) || !float.IsFinite(yaw)) return;
+            if (!float.IsFinite(pos.X) || !float.IsFinite(pos.Y) || !float.IsFinite(pos.Z) || !float.IsFinite(yaw) || !float.IsFinite(pitch)) return;
             if (_count == 0) { _p0 = _p1 = _shown = pos; _yaw0 = _yaw1 = _shownYaw = yaw; _pitch0 = _pitch1 = _shownPitch = pitch; _t0 = _t1 = now; _count = 1; return; }
             double gap = now - _t1; if (gap > 1e-4) _period = Math.Clamp(gap, 0.01, 0.5);
             _p0 = _p1; _yaw0 = _yaw1; _pitch0 = _pitch1; _t0 = _t1;
@@ -32,7 +32,9 @@ namespace Lycoreia.Players
             double s = Math.Min((now - _t1) / _period, MaxExtrapolate / _period) + 1.0;       // 0 at the older snapshot, 1 at the newest, >1 extrapolates
             float f = (float)s;
             var p = new Vec3(_p0.X + (_p1.X - _p0.X) * f, _p0.Y + (_p1.Y - _p0.Y) * f, _p0.Z + (_p1.Z - _p0.Z) * f);
-            return (p, _yaw0 + DeltaAngle(_yaw0, _yaw1) * f, _pitch0 + (_pitch1 - _pitch0) * Math.Clamp(f, 0, 1));
+            // position may extrapolate (bounded to 1 s); a turn never does past the newest sample: extrapolating a 30-degree turn for 20
+            // periods during a short packet gap spun the whole avatar round
+            return (p, _yaw0 + DeltaAngle(_yaw0, _yaw1) * Math.Clamp(f, 0, 1), _pitch0 + (_pitch1 - _pitch0) * Math.Clamp(f, 0, 1));
         }
 
         public void Step(double now, float dt)

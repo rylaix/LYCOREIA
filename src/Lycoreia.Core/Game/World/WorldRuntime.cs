@@ -30,7 +30,7 @@ namespace Lycoreia.Game.World
         public bool TryApply(string key, double value, bool fromSnapshot)
         {
             var m = Model(key); if (m == null) return false;
-            try { using (Applying.Enter()) { _push(m, value); if (_notifyWithMode != null) _notifyWithMode(m, fromSnapshot); else _notify(m); } return true; }
+            try { using (Applying.Enter()) { _push(m, value); if (_notifyWithMode != null) _notifyWithMode(m, fromSnapshot); else _notify(m); } if (!fromSnapshot) Log.Info($"world {typeof(TModel).Name} {key}: applied {value}"); return true; }
             catch (Exception e) { Log.Debug($"apply {typeof(TModel).Name} {key}: {e.Message}"); return false; }
         }
         public double Current(string key, double fallback) { var m = Model(key); try { return m != null ? _read(m) : fallback; } catch { return fallback; } }
@@ -38,9 +38,16 @@ namespace Lycoreia.Game.World
         public string KeyOf(TModel model)
         {
             var g = GameState.Model; var t = g != null ? _table(g) : null; if (t == null || model == null) return null;
-            foreach (var kv in t) if (kv.Value != null && kv.Value.Pointer == model.Pointer) return kv.Key;
-            return null;
+            // 2.1: the door/slot/barrier hooks call this for every object at zone load: cache pointer -> key, rebuild once on a miss
+            if (_keyOf.TryGetValue(model.Pointer, out var cached) && t.TryGetValue(cached, out var hit) && hit != null && hit.Pointer == model.Pointer) return cached;
+            if (g.Pointer != _keyOfModel || _keyOf.Count == 0 || !_keyOf.ContainsKey(model.Pointer))
+            {
+                _keyOf.Clear(); _keyOfModel = g.Pointer;
+                foreach (var kv in t) if (kv.Value != null && kv.Key != null) _keyOf[kv.Value.Pointer] = kv.Key;
+            }
+            return _keyOf.TryGetValue(model.Pointer, out var key) ? key : null;
         }
+        readonly Dictionary<IntPtr, string> _keyOf = new Dictionary<IntPtr, string>(); IntPtr _keyOfModel;
         public IEnumerable<(string key, double value)> All()
         {
             var g = GameState.Model; var t = g != null ? _table(g) : null; if (t == null) yield break;
@@ -68,6 +75,7 @@ namespace Lycoreia.Game.World
                 // save notifies with stale values, which must never overwrite the host's state
                 if (Mod.IsGuest && (known == null || System.Pending.Contains(key))) return;
                 System.Publish(key, v);
+                Log.Info($"world {_name} {key}: {(Mod.IsHost ? "published" : "sent to the host")} (value {v}, was {(known.HasValue ? known.Value.ToString() : "unknown")})");
                 Mod.Diagnostics?.Record("world", "keyed-state-published", $"kind={_name}; id={key}; value={v}; authority={(Mod.IsHost ? "host" : "intent")}");
             }
             catch (Exception e) { Hooks.HookGuard.Fail(_name + ".notify", e); }
@@ -111,16 +119,21 @@ namespace Lycoreia.Game.World
                 }),
                 m => (m.Id, m.State), (k, v) => new SwitchActivate { Id = k, State = (int)v });
             Doors = new KeyedKind<AccessDoorModel, Lycoreia.Net.Messages.AccessDoor>("door", s,
-                new KeyedModelAdapter<AccessDoorModel>(g => g.doors, m => (int)m.state, (m, v) => m.state = (Il2CppMonomiPark.World.AccessDoor.State)(int)v, m => m.NotifyParticipants()),
+                new KeyedModelAdapter<AccessDoorModel>(g => g.doors, m => (int)m.state, (m, v) => m.state = (Il2CppMonomiPark.World.AccessDoor.State)(int)v, m =>
+                {
+                    if (m.gameObj == null) return;                                              // unloaded door: the model holds the state (issue4: 2338 NREs)
+                    var door = m.gameObj.GetComponent<Il2CppMonomiPark.World.AccessDoor>();
+                    if (door != null) door.ForceUpdate(false); else m.NotifyParticipants();     // the native setter skips an equal model state: animate directly
+                }),   // unloaded door: the model holds the state (issue4: 2338 NREs, 4 retries/s per door)
                 m => (m.Id, m.State), (k, v) => new Lycoreia.Net.Messages.AccessDoor { Id = k, State = (int)v }, DoorMerge);
             Slots = new KeyedKind<PuzzleSlotModel, Lycoreia.Net.Messages.PuzzleSlot>("puzzle-slot", s,
                 new KeyedModelAdapter<PuzzleSlotModel>(g => g.slots, m => m.filled ? 1 : 0, (m, v) => m.filled = v > 0, m => { if (m.gameObj != null) m.NotifyParticipants(); }),
                 m => (m.Id, m.Filled ? 1 : 0), (k, v) => new Lycoreia.Net.Messages.PuzzleSlot { Id = k, Filled = v > 0 });
             Depositors = new KeyedKind<PlortDepositorModel, Lycoreia.Net.Messages.PlortDepositor>("depositor", s,
-                new KeyedModelAdapter<PlortDepositorModel>(g => g.depositors, m => m.AmountDeposited, (m, v) => m.AmountDeposited = (int)v, m => m.NotifyParticipants()),
+                new KeyedModelAdapter<PlortDepositorModel>(g => g.depositors, m => m.AmountDeposited, (m, v) => m.AmountDeposited = (int)v, m => { if (m._gameObject != null) m.NotifyParticipants(); }),
                 m => (m.Id, m.Amount), (k, v) => new Lycoreia.Net.Messages.PlortDepositor { Id = k, Amount = (int)v }, Math.Max);
             Barriers = new KeyedKind<PrismaBarrierModel, Lycoreia.Net.Messages.PrismaBarrier>("prisma-barrier", s,
-                new KeyedModelAdapter<PrismaBarrierModel>(g => g._prismaBarriers, m => m.ActivationTime, (m, v) => m.ActivationTime = v, m => m.NotifyParticipants()),
+                new KeyedModelAdapter<PrismaBarrierModel>(g => g._prismaBarriers, m => m.ActivationTime, (m, v) => m.ActivationTime = v, m => { if (m._gameObj != null) m.NotifyParticipants(); }),
                 m => (m.Id, m.ActivationTime), (k, v) => new Lycoreia.Net.Messages.PrismaBarrier { Id = k, ActivationTime = v });
 
             // join snapshots: the host's live models are the truth
@@ -300,6 +313,7 @@ namespace Lycoreia.Game.World
             if (!Mod.IsNetworkActive || Applying.Active || c == null || delta == 0 || Currency == null) return;
             int type = c.PersistenceId;
             Mod.Diagnostics?.Record("currency", "native-delta", $"type={type}; delta={delta}; sale-depth={SaleDepth}; host={Mod.IsHost}");
+            if (SaleDepth > 0 && delta > 0) Coop.CoopRuntime.Report(Lycoreia.Coop.CoopStat.MoneyEarned, delta);                // 2.1 recap / Market Day
             if (Mod.IsHost) { var ps = SceneContext.Instance?.PlayerState; if (ps != null) Currency.HostLocalChanged(type, ps.GetCurrency(c)); return; }
             if (SaleDepth > 0 && delta > 0) return;
             var request = Currency.Request(type, delta);
@@ -456,6 +470,17 @@ namespace Lycoreia.Game.World
             _nextGordoRetry = now + 0.25;
             foreach (var kv in _pendingGordos.ToArray()) ApplyGordo(kv.Key, kv.Value);
         }
+        /// <summary>Host: pays shared money (expedition rewards) through the native balance, so it is published like any host income and shown with the native notice.</summary>
+        public static bool HostGrantMoney(int amount)
+        {
+            try
+            {
+                if (!Mod.IsHost || amount <= 0) return false;
+                var ps = SceneContext.Instance?.PlayerState; var def = CurrencyById(Market.SaleCurrency); if (ps == null || def == null) return false;
+                ps.AddCurrency(def.Cast<ICurrency>(), amount, true, null); return true;
+            }
+            catch (Exception e) { Rl.Warn("grant", "reward payment failed: " + e.Message); return false; }
+        }
         public static string GordoKey(GordoModel model)
         {
             var g = GameState.Model; if (g?.gordos == null || model == null) return null;
@@ -481,6 +506,9 @@ namespace Lycoreia.Game.World
             var gm = eat.GordoModel; var id = GordoKey(gm); if (id == null) return;
             int type = ActorTypes.IdOf(gm.identifiableType), eaten = eat.GetEatenCount(), required = eat.GetTargetCount();
             long foodActorId = priorFoodActorId != 0 ? priorFoodActorId : ActorLink.IdOf(food);
+            // 2.1 recap / Gordo Feast: the seat whose food it was counts it (a host's native bite of a guest's food replica is not a host feed)
+            bool ownFood = foodActorId == 0 || Mod.Actors == null || !Mod.Actors.Table.TryGet(foodActorId, out var fe) || fe.Owner == Mod.LocalId;
+            if (ownFood) Coop.CoopRuntime.Report(Lycoreia.Coop.CoopStat.GordoFood, Math.Max(1, nativeUnits));
             Mod.Diagnostics?.Record("world", "gordo-feed-observed", $"id={id}; food={foodActorId}; eaten={eaten}; required={required}; authority={(Mod.IsHost ? "host" : "intent")}");
             if (Mod.IsHost)
             {

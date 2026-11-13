@@ -54,7 +54,7 @@ internal static class PlayerPings
         {
             if (!ModFacade.IsNetworkActive)
             {
-                ClearAll();
+                ClearAll(); CoopWheel.Cancel();
 #if LYCOREIA_TEST
                 // Test builds: middle mouse pings offline too (to look at the marker alone).
                 if (MiddleClicked())
@@ -64,12 +64,14 @@ internal static class PlayerPings
                 return;
             }
 
-            if (MiddleClicked())
+            // 2.1: tap = ping, hold = co-op wheel (jobs and notes where you look) while in a session
+            if (!failed && CoopWheel.Tick(IsGameplayInputFree() && !CoopWheel.Busy, ModFacade.IsNetworkActive))
                 TryPing();
             AnimateAll();
         }
         catch (Exception ex)
         {
+            CoopWheel.Cancel();
             if (!failed)
                 OwnedLog.LogWarning($"Pings failed: {ex}");
             failed = true;

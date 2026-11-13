@@ -66,7 +66,7 @@ namespace Lycoreia.Game
             if (ids.Count > 0) Mod.Diagnostics?.Record("actors", "loading-simulator-released", $"count={ids.Count}; captures=preserved");
         }
 
-        static void ResetLocal() { _ownedAt.Clear(); SnapshotAppliedAt = double.NegativeInfinity; Motion.Clear(); Sampler.Clear(); _awakeOwned.Clear(); _reservationFrozen.Clear(); _cleanupQueue.Clear(); ProduceCache.Clear(); VacuumCapture.Reset(); GameActorWorld.Ranch.Clear(); }
+        static void ResetLocal() { _ownedAt.Clear(); SnapshotAppliedAt = double.NegativeInfinity; Motion.Clear(); Sampler.Clear(); _awakeOwned.Clear(); _reservationFrozen.Clear(); _cleanupQueue.Clear(); ProduceCache.Clear(); VacuumCapture.Reset(); GameActorWorld.Ranch.Clear(); _plortScale.Clear(); }
 
         public static void Forget(long id) { GameActorWorld.ForgetVisual(id); Motion.Remove(id); Sampler.Forget(id); _awakeOwned.Remove(id); _reservationFrozen.Remove(id); }
 
@@ -179,22 +179,49 @@ namespace Lycoreia.Game
             catch (Exception ex) { Rl.Warn("produce-own", "produce ownership: " + ex.Message); }
         }
 
+        const double ProduceResendSeconds = 5;
+        static readonly Dictionary<long, double> _produceResent = new Dictionary<long, double>(), _staleSince = new Dictionary<long, double>();
         static void ProduceSweep(ActorSync a)
         {
+            double now = Time.unscaledTimeAsDouble;
             foreach (var e in a.Table.All)
             {
                 if (e.IsGadget) continue;
                 try
                 {
+                    if (PlortPrefabScale(e.TypeId) is float plortScale) { CheckPlortScale(e, plortScale); continue; }
                     var go = GameActorWorld.ObjectOf(e.Id); if (go == null) continue; var rc = go.GetComponent<ResourceCycle>(); if (rc == null) continue;
                     var phase = PhaseOf(rc.GetState()); bool onTree = rc._joint != null && rc._joint.Joint != null;
                     // owner: every attach change and every stage change (unripe, ripe, edible, rotten) goes out at once; a frozen copy only
                     // becomes vacuumable when the game's own ripen/edible step ran on it
-                    if (e.Owner == Mod.LocalId && rc._model != null && (onTree != e.Attached || (int)rc._model.state != e.SentStage))
+                    if (e.Owner == Mod.LocalId && rc._model != null)
                     {
-                        e.SentStage = (int)rc._model.state;
-                        a.SendOwnedState(new ActorState { ActorId = e.Id, Kind = ActorStateKind.Produce, CycleState = e.SentStage, Progress = rc._model.progressTime, Scale = go.transform.localScale.x, Attached = onTree });
+                        bool changed = onTree != e.Attached || (int)rc._model.state != e.SentStage;
+                        // issue5 (fruit left floating on the other seat): a harvester's first state after its capture grant can reach the previous owner
+                        // before that owner applied the grant and is dropped there ("not from the owner"); the sender had already recorded it as sent,
+                        // so the old owner kept the fruit on its plant joint for up to 15 s. Re-send once a second for a few seconds after becoming owner.
+                        bool retry = !changed && _ownedAt.TryGetValue(e.Id, out var since) && now - since < ProduceResendSeconds && now - (_produceResent.TryGetValue(e.Id, out var last) ? last : 0) >= 1.0;
+                        if (changed || retry)
+                        {
+                            e.SentStage = (int)rc._model.state; if (_produceResent.Count > 4096) _produceResent.Clear(); _produceResent[e.Id] = now;
+                            a.SendOwnedState(new ActorState { ActorId = e.Id, Kind = ActorStateKind.Produce, CycleState = e.SentStage, Progress = rc._model.progressTime, Scale = go.transform.localScale.x, Attached = onTree });
+                            if (retry) Mod.Diagnostics?.Record("actors", "produce-state-resent", $"id={e.Id}; stage={e.SentStage}; attached={onTree}");
+                        }
                     }
+                    // replica: the owner says the fruit left its plant but this copy still hangs on the local joint (state lost or overtaken):
+                    // release it, otherwise the frozen copy stays in the air where the owner's harvest started
+                    else if (e.Owner != Mod.LocalId && onTree && !e.Attached && !Motion.IsPredicted(e.Id))
+                    {
+                        if (!_staleSince.TryGetValue(e.Id, out var st)) _staleSince[e.Id] = now;
+                        else if (now - st >= 1.0)
+                        {
+                            _staleSince.Remove(e.Id);
+                            GameActorWorld.InternalDepth++;
+                            try { rc.DetachFromJoint(); } finally { GameActorWorld.InternalDepth--; }
+                            Mod.Diagnostics?.Record("actors", "produce-stale-joint-released", $"id={e.Id}; owner={e.Owner}; stage={rc.GetState()}");
+                        }
+                    }
+                    else _staleSince.Remove(e.Id);
                     var body = go.GetComponent<Rigidbody>(); bool resting = body == null || body.velocity.sqrMagnitude < 0.04f;
                     var vac = go.GetComponent<Vacuumable>(); bool pulled = Motion.IsPredicted(e.Id) || (vac != null && vac.IsCaptive()); bool held = vac != null && vac.IsHeld();
                     var full = rc._defaultScale; bool small = full.sqrMagnitude > 0 && go.transform.localScale.x < full.x * 0.95f;
@@ -203,6 +230,30 @@ namespace Lycoreia.Game
                 catch { }
             }
         }
+        // ------------------------------------------------------------------ plort scale (issue4)
+        static readonly Dictionary<int, float> _plortScale = new Dictionary<int, float>();
+        /// <summary>The prefab scale of a plort type (cached per type id); null for every other type.</summary>
+        static float? PlortPrefabScale(int typeId)
+        {
+            if (_plortScale.TryGetValue(typeId, out var s)) return s > 0 ? s : null;
+            float v = 0;
+            try { if (ActorTypes.TryGetType(typeId, out var t) && t.IsPlort && t.prefab != null) v = t.prefab.transform.localScale.x; } catch { v = 0; }
+            if (ActorTypes.Count > 0) _plortScale[typeId] = v;                  // only cache once the registry exists
+            return v > 0 ? v : null;
+        }
+
+        /// <summary>A plort bigger than its prefab is never native: put it back and record who owned it (evidence for the root cause).</summary>
+        static void CheckPlortScale(ActorEntry e, float prefabScale)
+        {
+            var go = GameActorWorld.ObjectOf(e.Id); if (go == null) return;
+            float scale = go.transform.localScale.x;
+            if (!PlortScaleRule.IsOversized(scale, prefabScale)) return;
+            go.transform.localScale = Vector3.one * prefabScale;
+            string details = $"id={e.Id}; type={e.TypeId}; object={go.name}; owner={e.Owner}; mine={e.Owner == Mod.LocalId}; scale={scale:0.00}; prefab={prefabScale:0.00}";
+            Rl.Warn("plort-scale", "oversized plort corrected: " + details);
+            Mod.Diagnostics?.Record("actors", "plort-scale-corrected", details);
+        }
+
         static ProduceRules.Phase PhaseOf(ResourceCycle.State s) => s switch { ResourceCycle.State.UNRIPE => ProduceRules.Phase.Unripe, ResourceCycle.State.RIPE => ProduceRules.Phase.Ripe, ResourceCycle.State.EDIBLE => ProduceRules.Phase.Edible, _ => ProduceRules.Phase.Rotten };
 
         // ------------------------------------------------------------------ interest (4.2)

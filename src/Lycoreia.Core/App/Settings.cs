@@ -18,7 +18,7 @@ namespace Lycoreia
             StreamerMode = "streamer_mode", DisableAchievements = "disable_achievements", FriendsCanVac = "friends_can_vac_me", FriendsCanKick = "friends_can_kick_me",
             PacketSizeLogging = "packet_size_logging", PacketAckLogging = "packet_ack_logging", DevDiagnostics = "development_diagnostics",
             AutoBackups = "auto_save_backups", DeleteOldBackups = "delete_old_backups", BackupsToKeep = "backups_to_keep", SkipHostConnectBackups = "skip_host_connect_backups",
-            RockPlortMode = "rock_plort_mode", DiscordPresence = "discord_presence";
+            RockPlortMode = "rock_plort_mode", DiscordPresence = "discord_presence", UpdateCheck = "update_check";
 
         public static IReadOnlyList<SettingDef> All { get; } = new List<SettingDef>
         {
@@ -37,7 +37,7 @@ namespace Lycoreia
 #endif
                 , "Development Diagnostics (bounded logs)"),
             new SettingDef(AutoBackups, true, "Automatic Save Backups"), new SettingDef(DeleteOldBackups, false, "Delete Old Backups"),
-            new SettingDef(DiscordPresence, true, "Discord Presence"),
+            new SettingDef(DiscordPresence, true, "Discord Presence"), new SettingDef(UpdateCheck, true, "Check For Updates"),
             new SettingDef(BackupsToKeep, 10, "Backups To Keep", min: 1), new SettingDef(SkipHostConnectBackups, false, "Skip Host/Connect Backups"),
         };
 

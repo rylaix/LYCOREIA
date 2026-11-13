@@ -56,8 +56,21 @@ namespace Lycoreia.Tests
             {
                 T.Eq(GameVersionVerdict.Ok, VersionCheck.CheckGame("1.3.0 (build 99)")); T.Eq(GameVersionVerdict.TooOld, VersionCheck.CheckGame("1.2.9")); T.Eq(GameVersionVerdict.Newer, VersionCheck.CheckGame("1.3.1 x"));
                 T.Eq("2.0.0", VersionCheck.StripPreRelease("2.0.0-dev")); T.Eq("1.1.0", VersionCheck.StripPreRelease("v1.1.0-rc.14"));
-                T.Eq(ModVersionVerdict.Outdated, VersionCheck.CheckMod("1.1.0-rc.14", "1.2.0")); T.Eq(ModVersionVerdict.Newer, VersionCheck.CheckMod("2.0.0-dev", "1.1.0")); T.Eq(ModVersionVerdict.UpToDate, VersionCheck.CheckMod("1.1.0", "1.1.0\n"));
+                T.Eq(ModVersionVerdict.Outdated, VersionCheck.CheckMod("1.1.0-rc.14", "1.2.0")); T.Eq(ModVersionVerdict.Newer, VersionCheck.CheckMod("2.0.0-dev", "1.1.0")); T.Eq(ModVersionVerdict.UpToDate, VersionCheck.CheckMod("1.1.0", "1.1.0\n")); T.Eq(ModVersionVerdict.Outdated, VersionCheck.CheckMod("2.1.0-rc1", "2.1.0")); T.Eq(ModVersionVerdict.Newer, VersionCheck.CheckMod("2.1.0", "2.1.0-rc1")); T.Eq(ModVersionVerdict.UpToDate, VersionCheck.CheckMod("2.1.0-rc1", "2.1.0-rc1"));
                 T.True(VersionCheck.DevEqualsRelease("1.1.0-dev", "1.1.0"));
+            });
+            T.Test("version/session build tag carries the game version and both must match", () =>
+            {
+                T.Eq("2.0.1 (game 1.3.0)", VersionCheck.BuildTag("2.0.1", "1.3.0 [20260704030000-113492]")); T.Eq("2.0.1", VersionCheck.BuildTag("2.0.1", ""));
+                T.True(VersionCheck.DescribeBuildMismatch("2.0.1 (game 1.3.0)", "2.0.1 (game 1.3.0)") == null);
+                T.True(VersionCheck.DescribeBuildMismatch("2.0.1 (game 1.3.0)", "2.0.1") == null, "a guest without a game version is not blocked");
+                T.True(VersionCheck.DescribeBuildMismatch("2.0.1 (game 1.3.0)", "2.0.1 (game 1.1.0)").StartsWith("Game version mismatch"));
+                T.True(VersionCheck.DescribeBuildMismatch("2.0.1 (game 1.3.0)", "2.0.0").Contains("Lycoreia 2.0.1, you run 2.0.0"));
+            });
+            T.Test("snapshot/only broad replica failures request a resync", () =>
+            {
+                T.True(!Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(7, 536), "7 of 536 (issue 2026-11-09) continues");
+                T.True(!Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(3, 10)); T.True(Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(10, 40)); T.True(Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(536, 536));
             });
             T.Test("commands/host connect resync cheats cleanup", () =>
             {

@@ -11,7 +11,7 @@ namespace Lycoreia.Game.World
     {
         static void InitStageB2(Session s, SnapshotHost snap)
         {
-            DroneAdapter.Install(s, snap); GardenAdapter.Install(s, snap); LinkAdapter.Install(s, snap); MarketAdapter.Install(Market);
+            DroneAdapter.Install(s, snap); GardenAdapter.Install(s, snap); SiloAdapter.Install(s, snap); LinkAdapter.Install(s, snap); MarketAdapter.Install(Market);
             ResourceNodeAdapter.Install(s, snap); GadgetAdapter.Install(s, snap);
             snap.Register(SnapStep.Prices, ctx => { var m = new Lycoreia.Net.Messages.MarketPrices(); foreach (var kv in _lastPrices()) m.Prices.Add(new Lycoreia.Net.Messages.IntPair { A = kv.Key, B = kv.Value }); if (m.Prices.Count > 0) ctx.Send(m); });
         }
@@ -34,6 +34,7 @@ namespace Lycoreia.Game.World
             finally { LagProbe.End("world-links", started); }
             started = LagProbe.Start();
             try { GardenAdapter.Instance?.Pump(now); } catch (Exception e) { Rl.Warn("pump-gardens", "gardens pump failed: " + e.Message); }
+            try { SiloAdapter.Instance?.Pump(now); } catch (Exception e) { Rl.Warn("pump-silos", "plot storage pump failed: " + e.Message); }
             finally { LagProbe.End("world-gardens", started); }
             started = LagProbe.Start();
             try { ResourceNodeAdapter.Pump(); } catch (Exception e) { Rl.Warn("pump-nodes", "nodes pump failed: " + e.Message); }

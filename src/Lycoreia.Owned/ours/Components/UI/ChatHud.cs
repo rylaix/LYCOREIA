@@ -85,7 +85,7 @@ internal static class ChatHud
 
         try
         {
-            var visible = ui.IsChatAllowed && !ui.ChatHidden && inGame
+            var visible = ui.IsChatAllowed && !ui.ChatHidden && inGame && !CoopWheel.Busy
                           && !LycoreiaMenu.IsOpen && !Lycoreia.Game.Hooks.GameMenus.NativePaused;
             if (visible != lastVisible)
             {
@@ -116,7 +116,7 @@ internal static class ChatHud
             buildFailed = true;
             OwnedLog.LogError($"Chat HUD disabled after an error: {ex}");
             if (inputDisabled)
-                MultiplayerUI.SetGameInputEnabled(true);
+                InputGate.Set("chat", false);
         }
     }
 
@@ -183,7 +183,7 @@ internal static class ChatHud
 
         if (!inputDisabled)
         {
-            MultiplayerUI.SetGameInputEnabled(false);
+            InputGate.Set("chat", true);
             inputDisabled = true;
         }
 
@@ -205,7 +205,7 @@ internal static class ChatHud
         lastInputText = string.Empty;
         if (inputDisabled)
         {
-            MultiplayerUI.SetGameInputEnabled(true);
+            InputGate.Set("chat", false);
             inputDisabled = false;
         }
 

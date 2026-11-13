@@ -47,13 +47,18 @@ namespace Lycoreia.Game.World
             s.ClientDisconnected += _ => { ClearAll(); GardenJoinCheck.Reset(); };   // offline every hook passes: gardens run vanilla again
             Mod.Guest.SnapshotApplied += () => { if (_joinCheckArmed) { _joinCheckArmed = false; GardenJoinCheck.Schedule(); } };
         }
-        void ClearAll() { PlotTypes.Clear(); Upgrades.Clear(); Gardens.Clear(); Leases.Clear(); _cropNextFrame.Clear(); _loadedSince.Clear(); _claimedAt.Clear(); }
+        void ClearAll() { PlotTypes.Clear(); Upgrades.Clear(); Gardens.Clear(); Leases.Clear(); _cropNextFrame.Clear(); _cropDeferredFrame.Clear(); _cropTries.Clear(); _loadedSince.Clear(); _claimedAt.Clear(); _convergeTries.Clear(); }
 
         // ---------------------------------------------------------------- keys and lookups
         static string UpgradeKey(string plot, int upgrade) => (plot ?? "") + "|" + upgrade;
         static (string plot, int upgrade) SplitUpgrade(string k) { int i = k?.LastIndexOf('|') ?? -1; return i > 0 && int.TryParse(k.Substring(i + 1), out var u) ? (k.Substring(0, i), u) : ("", 0); }
         static LandPlotModel PlotModel(string id) { var t = GameState.LandPlots; return t != null && id != null && t.TryGetValue(id, out var m) ? m : null; }
         static LandPlot PlotObject(string id) { var m = PlotModel(id); var go = m?.gameObj; return go != null && go.activeInHierarchy ? (go.GetComponent<LandPlot>() ?? go.GetComponentInChildren<LandPlot>(true)) : null; }
+        /// <summary>The plot object registered for this location, active or not (a hibernating ranch region keeps it inactive). Pre-2026-11-12
+        /// the type/upgrade apply used <see cref="PlotObject"/> (active only) and only rewrote the model under a registered inactive plot:
+        /// paddocks already in the host's save never appeared on the guest. The game builds a plot from its model only when the location
+        /// registers (LandPlotLocation.Awake -> GameModel.RegisterLandPlot).</summary>
+        static LandPlot BoundPlot(string id) { var go = PlotModel(id)?.gameObj; return go != null ? (go.GetComponent<LandPlot>() ?? go.GetComponentInChildren<LandPlot>(true)) : null; }
         public static string PlotIdOf(Component c) { try { var loc = c != null ? c.GetComponentInParent<LandPlotLocation>() : null; return loc != null ? loc.Id : null; } catch { return null; } }
         static IEnumerable<string> GardenIds()
         {
@@ -79,12 +84,13 @@ namespace Lycoreia.Game.World
                 {
                     var g = GameState.Model; if (g == null) return false;
                     var m = PlotModel(key) ?? g.InitializeLandPlotModel(key);                          // the guest's save may be less advanced: create the missing model
-                    if (m == null) return false; var type = (LandPlot.Id)(int)value; if (m.typeId == type) return true;
-                    var plot = PlotObject(key); var loc = plot != null ? plot.GetComponentInParent<LandPlotLocation>() : null;
+                    if (m == null) return false; var type = (LandPlot.Id)(int)value;
+                    var plot = BoundPlot(key); var loc = plot != null ? plot.GetComponentInParent<LandPlotLocation>(true) : null;
+                    if (plot != null ? plot.TypeId == type : m.typeId == type) return true;                 // what the seat shows, not only the model
                     using (Applying.Enter())
                     {
-                        if (plot != null && loc != null) { var prefab = GameContext.Instance?.LookupDirector?.GetPlotPrefab(type); if (prefab == null) return false; loc.Replace(plot, prefab); }
-                        else { m.typeId = type; m.upgrades?.Clear(); m.resourceGrowerDefinition = null; }   // the location binds the type when the area loads
+                        if (plot != null && loc != null) { var prefab = GameContext.Instance?.LookupDirector?.GetPlotPrefab(type); if (prefab == null) { PlotLog(key, $"type {type}: no prefab"); return false; } loc.Replace(plot, prefab); PlotLog(key, $"type {type} applied (rebuilt)"); }
+                        else { m.typeId = type; m.upgrades?.Clear(); m.resourceGrowerDefinition = null; PlotLog(key, $"type {type} applied to the model (area not loaded)"); }   // the location binds the type when the area loads
                     }
                     Instance?.Upgrades.Forget(k => k.StartsWith(key + "|", StringComparison.Ordinal));
                     if (fromSnapshot) Instance?.MarkReplaced(key);
@@ -101,24 +107,29 @@ namespace Lycoreia.Game.World
                 try
                 {
                     var (p, u) = SplitUpgrade(key); var m = PlotModel(p); if (m == null || value <= 0) return false; var up = (LandPlot.Upgrade)u;
-                    if (m.HasUpgrade(up)) return true;
-                    using (Applying.Enter()) { var plot = PlotObject(p); if (plot != null) plot.AddUpgrade(up); else m.upgrades.Add(up); }
+                    var plot = BoundPlot(p);
+                    if (plot != null ? plot.HasUpgrade(up) && m.HasUpgrade(up) : m.HasUpgrade(up)) return true;
+                    using (Applying.Enter()) { if (plot != null) plot.AddUpgrade(up); else m.upgrades.Add(up); PlotLog(p, $"upgrade {up} applied" + (plot != null ? "" : " to the model (area not loaded)")); }
                     return true;
                 }
                 catch (Exception e) { Rl.Warn("plot-upgrade", $"plot upgrade {key} failed: {e.Message}"); return false; }
             }
         }
         void MarkReplaced(string plotId) { if (Gardens.Crops.TryGetValue(plotId, out var c)) _cropNextFrame[plotId] = c; }
+        const int MaxCropTries = 10;
+        readonly Dictionary<string, int> _cropTries = new Dictionary<string, int>(StringComparer.Ordinal), _cropDeferredFrame = new Dictionary<string, int>(StringComparer.Ordinal);
+        /// <summary>Plant the plot's current crop (read again at that time) on a frame after this one.</summary>
+        void DeferCrop(string plotId) { _cropNextFrame[plotId] = Gardens.CropOf(plotId); _cropDeferredFrame[plotId] = Time.frameCount; }
 
         public void OnLocalPlotReplaced(string plotId, GameObject replacement)
         {
             if (Applying.Active || string.IsNullOrEmpty(plotId) || replacement == null) return;
             var lp = replacement.GetComponent<LandPlot>() ?? replacement.GetComponentInChildren<LandPlot>(true); if (lp == null) return;
             Upgrades.Forget(k => k.StartsWith(plotId + "|", StringComparison.Ordinal));
-            PlotTypes.Publish(plotId, (int)lp.TypeId);
+            PlotTypes.Publish(plotId, (int)lp.TypeId); PlotLog(plotId, $"local plot became {lp.TypeId}: published");
             if (lp.TypeId == LandPlot.Id.GARDEN && Mod.IsHost) Leases.Claim(plotId);
         }
-        public void OnLocalUpgrade(LandPlot plot, LandPlot.Upgrade up) { if (Applying.Active || plot == null) return; var id = PlotIdOf(plot); if (id != null) Upgrades.Publish(UpgradeKey(id, (int)up), 1); }
+        public void OnLocalUpgrade(LandPlot plot, LandPlot.Upgrade up) { if (Applying.Active || plot == null) return; var id = PlotIdOf(plot); if (id != null) { Upgrades.Publish(UpgradeKey(id, (int)up), 1); PlotLog(id, $"local upgrade {up}: published"); } else PlotLog("?", $"local upgrade {up} on a plot without location: not published"); }
 
         // ---------------------------------------------------------------- crops
         public void OnLocalPlant(GardenCatcher catcher, IdentifiableType crop) { if (Applying.Active || crop == null) return; var id = PlotIdOf(catcher); int t = ActorTypes.IdOf(crop); if (id != null && t > 0) Gardens.LocalCrop(id, id, t); }
@@ -135,10 +146,23 @@ namespace Lycoreia.Game.World
                     if (plot == null) { m.resourceGrowerDefinition = crop != null ? GrowerFor(crop) : null; return; }   // planted from the model when the plot loads
                     var current = plot.GetAttachedCropId();
                     if (crop != null && current != null && current.ReferenceId == crop.ReferenceId) return;
-                    if (current != null || plot.HasAttached()) plot.DestroyAttached();                      // the catcher rejects an occupied plot: clear any optimistic crop first
+                    if (current != null || plot.HasAttached())
+                    {
+                        // The catcher rejects an occupied plot, and Unity destroys the old crop only at the end of the frame: planting in
+                        // this frame produced nothing and was never retried (issue 2026-11-09). Clear now, plant on a later frame.
+                        plot.DestroyAttached();
+                        if (crop != null) DeferCrop(plotId);
+                        return;
+                    }
                     if (crop == null) return;
                     var catcher = plot.GetComponentInChildren<GardenCatcher>(true);
-                    if (catcher == null || catcher.Plant(crop, false) == null) Rl.Warn("garden-plant-" + plotId, $"garden {plotId}: plant {crop.name} produced nothing");
+                    if (catcher == null || catcher.Plant(crop, false) == null)
+                    {
+                        int tries = _cropTries.TryGetValue(plotId, out var n) ? n + 1 : 1;
+                        if (tries <= MaxCropTries) { _cropTries[plotId] = tries; DeferCrop(plotId); }
+                        else { _cropTries.Remove(plotId); Rl.Warn("garden-plant-" + plotId, $"garden {plotId}: plant {crop.name} produced nothing after {MaxCropTries} tries"); }
+                    }
+                    else _cropTries.Remove(plotId);
                 }
             }
             catch (Exception e) { Rl.Warn("garden-crop", $"garden {plotId} crop apply failed: {e.Message}"); }
@@ -175,10 +199,20 @@ namespace Lycoreia.Game.World
                 if (m.typeId == LandPlot.Id.GARDEN) { r.Crop = ActorTypes.IdOf(m.resourceGrowerDefinition?._primaryResourceType); r.CropRevision = Gardens.SnapshotRevision(kv.Key); }
                 msg.Items.Add(r);
             }
+            Log.Info($"land plots snapshot sent: {DescribePlots(msg)}");
             return msg;
         }
+        /// <summary>Plot sync events at info level (rare: purchases, upgrades, joins), issue4 "paddocks do not sync" had no evidence at all.</summary>
+        static void PlotLog(string plotId, string what)
+        {
+            Log.Info($"plot {plotId}: {what}");
+            Mod.Diagnostics?.Record("world", "plot", $"plot={plotId}; {what}");
+        }
+        static string DescribePlots(InitialLandPlots m)
+            => $"{m.Items.Count} plots, " + string.Join(", ", m.Items.GroupBy(r => (LandPlot.Id)r.Type).Select(g => $"{g.Key} {g.Count()}")) + $", {m.Items.Sum(r => r.Upgrades?.Count ?? 0)} upgrades";
         void ApplySnapshot(InitialLandPlots m)
         {
+            Log.Info($"land plots snapshot received: {DescribePlots(m)}");
             PlotTypes.LoadSnapshot(m.Items.Select(r => (r.Id, (double)r.Type)));
             Upgrades.LoadSnapshot(m.Items.SelectMany(r => (r.Upgrades ?? new List<int>()).Select(u => (UpgradeKey(r.Id, u), 1.0))));
             foreach (var r in m.Items)
@@ -195,10 +229,46 @@ namespace Lycoreia.Game.World
         {
             if (_cropNextFrame.Count > 0)
             {
-                foreach (var kv in _cropNextFrame.ToList()) { _cropNextFrame.Remove(kv.Key); int c = Gardens.CropOf(kv.Key); ApplyCrop(kv.Key, c); if (c > 0 && ActorTypes.TryGetType(c, out var crop)) GardenJoinCheck.ExpectCrop(kv.Key, crop); }
+                int frame = Time.frameCount;
+                foreach (var kv in _cropNextFrame.ToList()) { if (_cropDeferredFrame.TryGetValue(kv.Key, out var f) && f >= frame) continue; _cropDeferredFrame.Remove(kv.Key); _cropNextFrame.Remove(kv.Key); int c = Gardens.CropOf(kv.Key); ApplyCrop(kv.Key, c); if (c > 0 && ActorTypes.TryGetType(c, out var crop)) GardenJoinCheck.ExpectCrop(kv.Key, crop); }
             }
             if (now >= _nextLease) { _nextLease = now + LeaseEvery; PumpLeases(now); }
+            if (now >= _nextPlotCheck) { _nextPlotCheck = now + PlotCheckEvery; PlotTypes.RetryPending(); Upgrades.RetryPending(); if (Mod.IsGuest) ConvergePlots(); }
             if (now >= _nextTimer) { _nextTimer = now + TimerEvery; PumpTimers(); }
+        }
+        const double PlotCheckEvery = 5; const int MaxConvergeTries = 3; double _nextPlotCheck;
+        readonly Dictionary<string, int> _convergeTries = new Dictionary<string, int>();
+        /// <summary>At most a few rebuilds per plot and value; then one warning (never a rebuild every 5 s).</summary>
+        bool MayConverge(string key, string what)
+        {
+            int n = _convergeTries.TryGetValue(key, out var t) ? t + 1 : 1; _convergeTries[key] = n;
+            if (n <= MaxConvergeTries) return true;
+            if (n == MaxConvergeTries + 1) Rl.Warn("plot-converge:" + key, $"plot {key} still {what} after {MaxConvergeTries} attempts; giving up until the next change");
+            return false;
+        }
+        /// <summary>
+        /// Guest: every plot the host reported (join snapshot or live) must show that type and those upgrades on this seat, whenever the
+        /// plot was bought (before the mod, before this session or now). A plot whose object differs is applied again (rebuilds it).
+        /// </summary>
+        void ConvergePlots()
+        {
+            int fixedTypes = 0, fixedUpgrades = 0;
+            foreach (var key in PlotTypes.Keys.ToList())
+            {
+                if (PlotTypes.Get(key) is not double v) continue; var plot = BoundPlot(key);
+                if (plot == null || (int)plot.TypeId == (int)v) { _convergeTries.Remove(key); continue; }
+                if (!MayConverge(key, $"shows {plot.TypeId}")) continue;
+                PlotLog(key, $"shows {plot.TypeId}, host has {(LandPlot.Id)(int)v}: re-applying"); if (PlotTypes.Apply(key, v, false)) fixedTypes++;
+            }
+            foreach (var key in Upgrades.Keys.ToList())
+            {
+                var (p, u) = SplitUpgrade(key); var plot = BoundPlot(p); if (plot == null || Upgrades.Get(key) is not double v || v <= 0) continue;
+                if ((int)plot.TypeId != (int)(PlotTypes.Get(p) ?? (int)plot.TypeId)) continue;                                  // the type goes first
+                if (plot.HasUpgrade((LandPlot.Upgrade)u)) { _convergeTries.Remove(key); continue; }
+                if (!MayConverge(key, "misses an upgrade")) continue;
+                PlotLog(p, $"misses upgrade {(LandPlot.Upgrade)u}: re-applying"); if (Upgrades.Apply(key, v, false)) fixedUpgrades++;
+            }
+            if (fixedTypes + fixedUpgrades > 0) Mod.Diagnostics?.Record("world", "plots-converged", $"types={fixedTypes}; upgrades={fixedUpgrades}");
         }
         void PumpLeases(double now)
         {

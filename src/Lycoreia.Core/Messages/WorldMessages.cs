@@ -357,3 +357,29 @@ namespace Lycoreia.Net.Messages
         public override void Describe(Codec c) { c.Str(ref NodeId, 256); c.Flag(ref Waiting); }
     }
 }
+
+namespace Lycoreia.Net.Messages
+{
+    /// <summary>2.1: one plot storage slot on the wire.</summary>
+    public struct SiloSlotWire : IWire
+    {
+        public int Type, Count;
+        public void Describe(Codec c) { c.Var(ref Type); c.Var(ref Count); }
+    }
+
+    /// <summary>2.1: the host's whole content of one plot storage (silo, corral collector, feeder); absolute, the guest overwrites its copy.</summary>
+    [Msg(66, Direction.HostToGuest, Delivery.ReliableOrdered)]
+    public sealed class SiloState : Msg
+    {
+        public string Plot, Set; public List<SiloSlotWire> Slots = new List<SiloSlotWire>();
+        public override void Describe(Codec c) { c.Str(ref Plot, 256); c.Str(ref Set, 256); c.List(ref Slots, Items.Of<SiloSlotWire>(), 2); }
+    }
+
+    /// <summary>2.1: a guest changed one slot locally (vacuumed into or out of a silo); the host applies it and answers with SiloState.</summary>
+    [Msg(67, Direction.GuestToHost, Delivery.ReliableOrdered)]
+    public sealed class SiloDelta : Msg
+    {
+        public string Plot, Set; public int Slot, Type, Delta;
+        public override void Describe(Codec c) { c.Str(ref Plot, 256); c.Str(ref Set, 256); c.Var(ref Slot); c.Var(ref Type); c.Var(ref Delta); }
+    }
+}
