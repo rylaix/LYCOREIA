@@ -152,7 +152,8 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
     {
         Instance = this;
         if (!Mod.Initialised) return;
-        Mod.Session.ChatReceived += OnChat; Mod.Session.Notice += text => AddSystem(text, SystemMessageNormal);
+        Mod.Session.ChatReceived += OnChat; Mod.Session.Notice += OnNotice; NativeToast.ChatFallback = t => AddSystem(t, SystemMessageNormal);
+        Lycoreia.Text.CoopText.CanRender = lang => lang != "ru" || UiFonts.EnsureCyrillic();   // rc3: never draw Russian with a Latin-only font
         Mod.Session.ErrorShown += text => AddSystem(text, SystemMessageDisconnect);
         Mod.Session.PlayerAdded += p => { if (!p.IsHost) AddSystem($"{p.Name} joined the world!", SystemMessageConnect); };
         Mod.Session.PlayerRemoved += p => AddSystem($"{p.Name} left the world!", SystemMessageDisconnect);
@@ -167,6 +168,7 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
         LycoreiaMenu.Tick();
         UpdateLauncher();
         ChatHud.Update(this);
+        MenuPolish.Tick();
     }
     private void OnGUI() { try { DrawWatermark(); } catch { } }
 
@@ -200,6 +202,20 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
     {
         string id = Guid.NewGuid().ToString("N"); Mod.Chat.Register(id);
         Add(new ChatMessage { message = text, playerName = ColouredName(name), messageId = id, time = Now(), isOwn = true });
+    }
+
+    /// <summary>Co-op notice: localised chat line (history) plus a toast in a loaded world.</summary>
+    private void OnNotice(string text)
+    {
+        try
+        {
+            var line = Lycoreia.Text.CoopNoticeText.Localize(Lycoreia.Text.CoopText.RenderLang(), text, out var title, out var body, out var kind);
+            AddSystem(line, SystemMessageNormal);
+            if (!NativeToast.WorldLoaded) return;
+            var cue = kind == Lycoreia.Text.CoopNoticeText.Kind.Success ? UiCue.Success : kind == Lycoreia.Text.CoopNoticeText.Kind.Fail ? UiCue.Fail : UiCue.Notify;
+            NativeToast.Show(string.IsNullOrWhiteSpace(title) ? line : title!, body, null, cue);
+        }
+        catch { AddSystem(text, SystemMessageNormal); }
     }
 
     private void AddSystem(string text, byte type, string? id = null)

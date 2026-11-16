@@ -21,7 +21,7 @@ namespace Lycoreia
         public const long RotateBytes = 8L * 1024 * 1024;
         public const int WindowSeconds = 15;
 
-        readonly string _path; readonly long _rotate; readonly Func<DateTime> _utcNow;
+        readonly string _folder, _path; readonly long _rotate; readonly Func<DateTime> _utcNow;
         readonly BlockingCollection<string> _queue = new BlockingCollection<string>(QueueLimit);
         Thread _thread; volatile bool _failed; long _seq; int _dropped; long _written;
         readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -32,18 +32,19 @@ namespace Lycoreia
         public Func<string> HostId = () => ""; public Func<string> LocalId = () => ""; public Func<string> Role = () => "offline";
 
         public DiagnosticsWriter(string folder, long rotateBytes = RotateBytes, Func<DateTime> utcNow = null)
-        { Directory.CreateDirectory(folder); _path = Path.Combine(folder, "diagnostics.jsonl"); _rotate = rotateBytes; _utcNow = utcNow ?? (() => DateTime.UtcNow); }
+        { _folder = folder; _path = Path.Combine(folder, "diagnostics.jsonl"); _rotate = rotateBytes; _utcNow = utcNow ?? (() => DateTime.UtcNow); }
 
         public void Start(string version)
         {
             if (Enabled) return;
             // Optional diagnostics must not abort the expansion's remaining initialization.
-            try { Rotate(startup: true); }
-            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            try { Directory.CreateDirectory(_folder); Rotate(startup: true); }
+            catch (Exception e)
             {
-                Log.Warn("diagnostics could not start: " + e.Message);
+                Log.Warn($"diagnostics could not start at '{_path}' ({e.GetType().Name}: {e.Message}); diagnostics.jsonl is off");
                 return;
             }
+            Log.Info("diagnostics file: " + _path);
             Enabled = true;
             _thread = new Thread(Loop) { IsBackground = true, Name = "Lycoreia-diag" }; _thread.Start();
             Record("diagnostics", "diagnostics-started", $"version={version}; flavour={BuildInfo.Flavour}; mvid={typeof(DiagnosticsWriter).Assembly.ManifestModule.ModuleVersionId}; pid={Environment.ProcessId}; session={_session}");

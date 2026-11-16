@@ -25,6 +25,8 @@ namespace Lycoreia
         public static Lycoreia.Actors.ActorSync Actors { get; set; }
         public static ChatDedup Chat { get; } = new ChatDedup();
         public static string DataFolder { get; private set; }
+        /// <summary>Folder that actually holds latest.log (DataFolder, or a fallback when that was not writable); null when file logging is off.</summary>
+        public static string LogFolder { get; private set; }
         public static bool Initialised => Session != null;
         /// <summary>Game version as reported by Unity (e.g. "1.3.0 [build]"), and a user-facing warning when it is not the supported one.</summary>
         public static string GameVersion { get; internal set; } = "";
@@ -44,19 +46,22 @@ namespace Lycoreia
         public static void Init(string userDataRoot, Func<long> clock = null, bool diagnostics = false)
         {
             if (Session != null) return;
-            DataFolder = PrepareDataFolder(userDataRoot);
-            Log.Open(DataFolder);
+            try { DataFolder = PrepareDataFolder(userDataRoot); }
+            catch (Exception e) { DataFolder = Path.Combine(userDataRoot, BuildInfo.DataFolder); Log.Warn($"data folder '{DataFolder}' could not be created ({e.GetType().Name}: {e.Message})"); }
+            // issue7: no latest.log on a player's machine and no hint why. Fall back (UserData -> %LOCALAPPDATA% -> temp) and always say where the log is.
+            LogFolder = Log.OpenFirst(LogFolders.DefaultCandidates(DataFolder));
             Registry = MessageRegistry.FromAssembly(typeof(Mod).Assembly);
             Node = new Node(Registry, clock);
             Session = new Session(Node);
             Snapshots = new SnapshotHost(Session);
             Guest = new GuestSnapshotController(Session);
-            Diagnostics = new DiagnosticsWriter(DataFolder) { HostId = () => Session.HostId ?? "", LocalId = () => Session.LocalId ?? "", Role = () => Session.IsHost ? "host" : Session.IsGuest ? "client" : "offline" };
+            Diagnostics = new DiagnosticsWriter(LogFolder ?? DataFolder) { HostId = () => Session.HostId ?? "", LocalId = () => Session.LocalId ?? "", Role = () => Session.IsHost ? "host" : Session.IsGuest ? "client" : "offline" };
             Packets = new PacketWindow(Diagnostics, t => Registry.Get(t)?.Name ?? ("type" + t), Node.Clock);
             Node.SlowDispatch += (name, ms, queued) => Diagnostics?.Record("performance", "slow-dispatch-handler", $"type={name}; ms={ms:0.00}; queued={queued}");
             Node.PacketSeen += (t, b, p, sent) => { Packets.Seen(t, b, p, sent); if (Log.PacketSizes) Log.Debug($"{(sent ? "sent" : "got")} {Registry.Get(t)?.Name} {b} bytes"); };
             Node.Rejected += Packets.Rejected;
             if (diagnostics) Diagnostics.Start(BuildInfo.Version);
+            else Log.Info("diagnostics.jsonl is off (setting development_diagnostics is false)");
             AutoHost = new AutoHost(new UpnpGateway(), new NetshFirewall()) { PortStillHosted = p => Session.IsHost };
             Session.ServerStopped += () => AutoHost.ReleaseAsync();
         }

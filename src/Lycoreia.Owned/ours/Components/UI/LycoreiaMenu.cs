@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Rylaix and Kum1te. All rights reserved.
 // Lycoreia Source-Available License 1.0 - see LICENSE. Copying, redistribution and derivative works are prohibited.
 using Il2CppInterop.Runtime.Attributes;
+using Lycoreia.Text;
 using Il2CppTMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -176,6 +177,7 @@ internal sealed partial class LycoreiaMenu
     {
         UiCanvas.EnsureEventSystem();
         EnsureRoot();
+        probePending = true;
         var wasActive = menuRoot!.activeSelf;
         menuRoot.SetActive(true);
         PlayFade(true, wasActive);
@@ -197,11 +199,35 @@ internal sealed partial class LycoreiaMenu
         }
 
         OnOpen();
+        OwnedLog.LogDiagnostic("menu", "menu-open", $"page={page}; inGame={InGame}; scene={UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}; " + InputGate.PointerReport());
+    }
+
+    private bool probePending;
+
+    /// <summary>Top raycast hit under the pointer: shows whether something invisible sits above the menu buttons.</summary>
+    [HideFromIl2Cpp]
+    private string TopHit()
+    {
+        try
+        {
+            var es = EventSystem.current; var mouse = Mouse.current;
+            if (!es || mouse == null) return "no eventsystem/mouse";
+            var ped = new PointerEventData(es!) { position = mouse.position.ReadValue() };
+            var hits = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
+            es!.RaycastAll(ped, hits);
+            if (hits.Count == 0) return "none";
+            string Path(GameObject g) { var s = g.name; var t = g.transform.parent; for (int i = 0; t && i < 3; i++, t = t.parent) s = t.name + "/" + s; return s; }
+            var top = hits[0].gameObject; bool ours = menuRoot && top && top.transform.IsChildOf(menuRoot!.transform);
+            return $"top={(top ? Path(top) : "null")}; ours={ours}; hits={hits.Count}";
+        }
+        catch (Exception ex) { return "probe failed: " + ex.Message; }
     }
 
     internal void Close()
     {
+        if (_isOpen) OwnedLog.LogDiagnostic("menu", "menu-close", "page=" + page + "; " + InputGate.PointerReport());
         InputGate.Typing(false, false);
+        lockedInput = null;
         if (!_isOpen)
             return;
         try
@@ -295,6 +321,8 @@ internal sealed partial class LycoreiaMenu
     private void OnUpdate()
     {
         FitToScreen();
+        InputGate.EnsurePointer("menu");                                                        // issue7: clicks must work whatever state the native menu left the input actions in
+        if (probePending) { probePending = false; OwnedLog.LogDiagnostic("menu", "raycast-probe", TopHit()); }
         KeepInputFocus();
         InputGate.Typing(IsTyping(), false);                                                    // 2.1: keys typed here never reach the game or the pause menu
         UpdateFocusHighlight();
@@ -356,7 +384,9 @@ internal sealed partial class LycoreiaMenu
     private bool IsTyping()
     {
         var selected = EventSystem.current ? EventSystem.current.currentSelectedGameObject : null;
-        return lockedInput || selected && selected.GetComponent<TMP_InputField>();
+        var field = selected ? selected!.GetComponent<TMP_InputField>() : null;
+        // issue7: a field that merely stays SELECTED (after Esc, or after a click on a button) is not typing; only a focused one holds the keys
+        return InputGateState.IsTyping(lockedInput, field, field && field!.isFocused);
     }
 
     private TMP_InputField? lockedInput;
@@ -373,6 +403,7 @@ internal sealed partial class LycoreiaMenu
         var mouse = Mouse.current;
         if (mouse != null && mouse.leftButton.wasPressedThisFrame)
         {
+            OwnedLog.LogDiagnostic("menu", "menu-press", TopHit() + "; " + InputGate.PointerReport(), "menu:press", 300);
             lockedInput = InputUnderPointer(mouse.position.ReadValue());
             lockedLostFrames = 0;
             return;
@@ -518,12 +549,12 @@ internal sealed partial class LycoreiaMenu
             rows.Add(Label(versionWarning, UiColor.TextWarning));
         if (Lycoreia.Mod.Update is { Kind: Lycoreia.UpdateKind.UpdateAvailable or Lycoreia.UpdateKind.AheadOfPublic } update)
         {
-            rows.Add(Label(update.Message, UiColor.TextWarning));
+            rows.Add(Label(MenuText.UpdateMessage(update), UiColor.TextWarning));
             if (update.Kind == Lycoreia.UpdateKind.UpdateAvailable)
                 foreach (var source in update.Offering)
                 {
                     var url = source.Url;
-                    rows.Add(Button("Open " + source.Source, () => UnityEngine.Application.OpenURL(url), alternative: true));
+                    rows.Add(Button(MenuText.OpenSource(source.Source), () => UnityEngine.Application.OpenURL(url), alternative: true));
                 }
         }
 
@@ -534,7 +565,7 @@ internal sealed partial class LycoreiaMenu
         }
         else if (!ui)
         {
-            rows.Add(Label("The multiplayer UI is still starting. Try again in a moment."));
+            rows.Add(Label(MenuText.StillStarting));
         }
         else if (page == Page.WidescreenFov && !ui!.IsFirstTimeSetup)
         {
@@ -558,8 +589,8 @@ internal sealed partial class LycoreiaMenu
         }
         else if (ModFacade.Client.IsConnecting)
         {
-            rows.Add(Label("Connecting to the host..."));
-            rows.Add(Button("Cancel", () => ModFacade.Client.Disconnect()));
+            rows.Add(Label(MenuText.Connecting));
+            rows.Add(Button(MenuText.Cancel, () => ModFacade.Client.Disconnect()));
         }
         else if (ModFacade.Client.IsConnected)
         {
@@ -572,8 +603,8 @@ internal sealed partial class LycoreiaMenu
         else if (DirectLaunch.IsBusy)
         {
             rows.Add(Heading(DirectLaunch.StatusText));
-            rows.Add(Label("This menu can be closed; it continues in the background."));
-            rows.Add(Button("Cancel", DirectLaunch.Cancel, alternative: true));
+            rows.Add(Label(MenuText.MayCloseMenu));
+            rows.Add(Button(MenuText.Cancel, DirectLaunch.Cancel, alternative: true));
         }
         else if (!InGame && page == Page.Join)
         {
@@ -603,7 +634,7 @@ internal sealed partial class LycoreiaMenu
         if (!string.IsNullOrWhiteSpace(notice))
             rows.Add(Label(notice, UiColor.TextCategory));
 
-        rows.Add(Button("Close", Close, alternative: true));
+        rows.Add(Button(MenuText.Close, Close, alternative: true));
 
         // Stack rows top to bottom (a simple fixed stack): positions are
         // relative to the panel centre, and the panel grows to fit its rows.
@@ -632,12 +663,12 @@ internal sealed partial class LycoreiaMenu
     [HideFromIl2Cpp]
     private void AddMainMenuPage(List<UiNode> rows)
     {
-        rows.Add(Label($"Playing as <b>{ModFacade.Username}</b>"));
-        rows.Add(Button("Host a world", () => Navigate(Page.Host)));
-        rows.Add(Button("Join a friend", () => Navigate(Page.Join)));
+        rows.Add(Label(MenuText.PlayingAs(ModFacade.Username)));
+        rows.Add(Button(MenuText.HostWorld, () => Navigate(Page.Host)));
+        rows.Add(Button(MenuText.JoinFriend, () => Navigate(Page.Join)));
         AddError(rows, DirectLaunch.LastError);
         AddWhatsNewAndRecapButtons(rows);
-        rows.Add(Button("Settings", () => Navigate(Page.Settings), alternative: true));
+        rows.Add(Button(MenuText.Settings, () => Navigate(Page.Settings), alternative: true));
     }
 
     private const int MaxListedSaves = 5;
@@ -645,20 +676,20 @@ internal sealed partial class LycoreiaMenu
     [HideFromIl2Cpp]
     private void AddMainMenuHostPage(List<UiNode> rows, MultiplayerUI ui)
     {
-        rows.Add(Heading("Host a world"));
+        rows.Add(Heading(MenuText.HostWorld));
         rows.Add(Row(
-            Button("Join code (automatic)", () => { hostAutomatic = true; Rebuild(); }, width: 420f, alternative: !hostAutomatic),
-            Button("Fixed port", () => { hostAutomatic = false; Rebuild(); }, width: 420f, alternative: hostAutomatic)));
+            Button(MenuText.ModeCode, () => { hostAutomatic = true; Rebuild(); }, width: 420f, alternative: !hostAutomatic),
+            Button(MenuText.ModePort, () => { hostAutomatic = false; Rebuild(); }, width: 420f, alternative: hostAutomatic)));
         if (hostAutomatic)
-            rows.Add(Label("Opens a port on your router and gives you a code to share."));
+            rows.Add(Label(MenuText.HostAutoInfo));
         else
-            rows.Add(LabeledInput("Port", hostPortInput, "1919", v => hostPortInput = v,
+            rows.Add(LabeledInput(MenuText.Port, hostPortInput, "1919", v => hostPortInput = v,
                 TMP_InputField.ContentType.IntegerNumber));
 
-        rows.Add(Heading("Pick the world to host"));
+        rows.Add(Heading(MenuText.PickWorld));
         var saves = DirectLaunch.GetSaves().Where(s => s.GameName != DirectLaunch.JoinSaveName).Take(MaxListedSaves).ToList();
         if (saves.Count == 0)
-            rows.Add(Label("No saves yet. Start a new game first, then host from the pause menu.", UiColor.TextWarning));
+            rows.Add(Label(MenuText.NoSaves, UiColor.TextWarning));
         foreach (var save in saves)
         {
             rows.Add(Button(SaveLabel(save), () =>
@@ -684,13 +715,13 @@ internal sealed partial class LycoreiaMenu
 
         AddError(rows, ui.NativeLastError);
         AddError(rows, DirectLaunch.LastError);
-        rows.Add(Button("Back", () => Navigate(Page.Home), alternative: true));
+        rows.Add(Button(MenuText.Back, () => Navigate(Page.Home), alternative: true));
     }
 
     [HideFromIl2Cpp]
     private static string SaveLabel(DirectLaunch.SaveEntry save)
-        => $"{(int.TryParse(save.DisplayName, out _) ? "Save " + save.DisplayName : save.DisplayName)}" +
-           $"  <alpha=#99>({save.Currency:N0} newbucks)";
+        => (int.TryParse(save.DisplayName, out _) ? MenuText.SaveNumber(save.DisplayName) : save.DisplayName) +
+           "  <alpha=#99>" + MenuText.SaveCurrency((long)save.Currency);
 
     /// <summary>ModFacade menu join: validate the address, then load the co-op save and connect there.</summary>
     [HideFromIl2Cpp]
@@ -741,48 +772,48 @@ internal sealed partial class LycoreiaMenu
     [HideFromIl2Cpp]
     private void AddInGameHomePage(List<UiNode> rows)
     {
-        rows.Add(Label($"Playing as <b>{ModFacade.Username}</b>"));
-        rows.Add(Button("Host this world", () => Navigate(Page.Host)));
-        rows.Add(Button("Join a world", () => Navigate(Page.Join)));
-        rows.Add(Label("Joining replaces this save with the host's world. Use an empty save to join.",
+        rows.Add(Label(MenuText.PlayingAs(ModFacade.Username)));
+        rows.Add(Button(MenuText.HostThisWorld, () => Navigate(Page.Host)));
+        rows.Add(Button(MenuText.JoinWorld, () => Navigate(Page.Join)));
+        rows.Add(Label(MenuText.JoinReplaces,
             UiColor.TextWarning));
         AddError(rows, DirectLaunch.LastError);
         AddWhatsNewAndRecapButtons(rows);
-        rows.Add(Button("Settings", () => Navigate(Page.Settings), alternative: true));
+        rows.Add(Button(MenuText.Settings, () => Navigate(Page.Settings), alternative: true));
     }
 
     [HideFromIl2Cpp]
     private void AddJoinPage(List<UiNode> rows, MultiplayerUI ui)
     {
-        rows.Add(Heading("Join a world"));
+        rows.Add(Heading(MenuText.JoinHeading));
         rows.Add(Row(
-            Button("Join code", () => { joinByCode = true; Rebuild(); }, width: 420f, alternative: !joinByCode),
-            Button("IP address", () => { joinByCode = false; Rebuild(); }, width: 420f, alternative: joinByCode)));
+            Button(MenuText.TabJoinCode, () => { joinByCode = true; Rebuild(); }, width: 420f, alternative: !joinByCode),
+            Button(MenuText.TabIp, () => { joinByCode = false; Rebuild(); }, width: 420f, alternative: joinByCode)));
 
         if (joinByCode)
         {
-            rows.Add(LabeledInput("Join code", joinCodeInput, "Paste the host's code", v => joinCodeInput = v));
-            rows.Add(Button("Join", () => JoinNow(ui)));
+            rows.Add(LabeledInput(MenuText.JoinCode, joinCodeInput, MenuText.JoinCodePlaceholder, v => joinCodeInput = v));
+            rows.Add(Button(MenuText.Join, () => JoinNow(ui)));
         }
         else
         {
-            rows.Add(LabeledInput("Host IP", joinIpInput, "e.g. 192.168.1.20", v => joinIpInput = v));
-            rows.Add(LabeledInput("Port", joinPortInput, "e.g. 1919", v => joinPortInput = v,
+            rows.Add(LabeledInput(MenuText.HostIp, joinIpInput, MenuText.IpPlaceholder, v => joinIpInput = v));
+            rows.Add(LabeledInput(MenuText.Port, joinPortInput, MenuText.PortPlaceholder, v => joinPortInput = v,
                 TMP_InputField.ContentType.IntegerNumber));
-            rows.Add(Button("Join", () => JoinNow(ui)));
+            rows.Add(Button(MenuText.Join, () => JoinNow(ui)));
         }
 
         if (!InGame)
-            rows.Add(Label("Joining uses a separate co-op save, so your own worlds stay untouched."));
+            rows.Add(Label(MenuText.SeparateSave));
         AddError(rows, ui.NativeLastError);
         AddError(rows, DirectLaunch.LastError);
         if (!InGame && DirectLaunch.LastError.Length > 0)
         {
             // All slots full: let the player sacrifice one of their saves explicitly.
             foreach (var save in DirectLaunch.GetSaves().Take(MaxListedSaves))
-                rows.Add(Button("Use " + SaveLabel(save), () => JoinFromMainMenu(ui, save), alternative: true));
+                rows.Add(Button(MenuText.UseSave(SaveLabel(save)), () => JoinFromMainMenu(ui, save), alternative: true));
         }
-        rows.Add(Button("Back", () => Navigate(Page.Home), alternative: true));
+        rows.Add(Button(MenuText.Back, () => Navigate(Page.Home), alternative: true));
     }
 
     [HideFromIl2Cpp]
@@ -803,75 +834,75 @@ internal sealed partial class LycoreiaMenu
     [HideFromIl2Cpp]
     private void AddHostPage(List<UiNode> rows, MultiplayerUI ui)
     {
-        rows.Add(Heading("Host this world"));
-        rows.Add(Label("Automatic: opens a port on your router and gives you a join code to share."));
-        rows.Add(Button(ui.IsHostAutoInProgress ? ui.HostAutoStage : "Host automatically",
+        rows.Add(Heading(MenuText.HostThisWorld));
+        rows.Add(Label(MenuText.HostAutoBlurb));
+        rows.Add(Button(ui.IsHostAutoInProgress ? ui.HostAutoStage : MenuText.HostAuto,
             ui.NativeHostAutomatic, interactable: !ui.IsHostAutoInProgress));
-        if (ui.IsHostAutoInProgress) rows.Add(Button("Cancel automatic setup", ui.NativeCancelAutomatic, alternative: true));
+        if (ui.IsHostAutoInProgress) rows.Add(Button(MenuText.CancelAuto, ui.NativeCancelAutomatic, alternative: true));
         AddError(rows, ui.HostAutoError);
 
-        rows.Add(Heading("Or host on a port"));
-        rows.Add(LabeledInput("Port", hostPortInput, "1919", v => hostPortInput = v,
+        rows.Add(Heading(MenuText.OrHostPort));
+        rows.Add(LabeledInput(MenuText.Port, hostPortInput, "1919", v => hostPortInput = v,
             TMP_InputField.ContentType.IntegerNumber));
-        rows.Add(Button("Start server", () => ui.NativeHostOnPort(hostPortInput),
+        rows.Add(Button(MenuText.StartServer, () => ui.NativeHostOnPort(hostPortInput),
             interactable: !ui.IsHostAutoInProgress));
         AddError(rows, ui.NativeLastError);
-        rows.Add(Button("Back", () => Navigate(Page.Home), alternative: true));
+        rows.Add(Button(MenuText.Back, () => Navigate(Page.Home), alternative: true));
     }
 
     [HideFromIl2Cpp]
     private void AddHostingPage(List<UiNode> rows, MultiplayerUI ui)
     {
-        rows.Add(Heading("You are hosting"));
-        rows.Add(Label($"Port: {(ModFacade.StreamerMode ? "hidden (streamer mode)" : ModFacade.Server.Port.ToString())}"));
+        rows.Add(Heading(MenuText.YouAreHosting));
+        rows.Add(Label(MenuText.PortLine(ModFacade.StreamerMode ? MenuText.Hidden : ModFacade.Server.Port.ToString())));
 
         var code = ui.HostJoinCode;
         if (!string.IsNullOrWhiteSpace(code))
         {
-            rows.Add(Label($"Join code: <b>{(ModFacade.StreamerMode ? "hidden (streamer mode)" : code)}</b>"));
-            rows.Add(Button("Copy join code", () =>
+            rows.Add(Label(MenuText.CodeLine(ModFacade.StreamerMode ? MenuText.Hidden : code)));
+            rows.Add(Button(MenuText.CopyCode, () =>
             {
                 GUIUtility.systemCopyBuffer = code;
-                notice = "Join code copied.";
+                notice = MenuText.CodeCopied;
             }));
         }
 
         AddPlayers(rows);
-        if (InGame) rows.Add(Button("Co-op board: jobs, notes, expeditions", () => Navigate(Page.Coop)));
-        rows.Add(Button("Resync everyone", () =>
+        if (InGame) rows.Add(Button(MenuText.BoardButton, () => Navigate(Page.Coop)));
+        rows.Add(Button(MenuText.ResyncAll, () =>
         {
             ModFacade.Server.ReSyncManager.SynchronizeAll();
-            notice = "Resync sent to all players.";
+            notice = MenuText.ResyncSent;
         }));
-        rows.Add(Button("Settings", () => Navigate(Page.Settings), alternative: true));
-        rows.Add(Button("Stop server", () => ModFacade.Server.Close(), alternative: true));
+        rows.Add(Button(MenuText.Settings, () => Navigate(Page.Settings), alternative: true));
+        rows.Add(Button(MenuText.StopServer, () => ModFacade.Server.Close(), alternative: true));
     }
 
     [HideFromIl2Cpp]
     private void AddConnectedPage(List<UiNode> rows)
     {
-        rows.Add(Heading("Connected"));
+        rows.Add(Heading(MenuText.Connected));
         AddPlayers(rows);
-        if (InGame) rows.Add(Button("Co-op board: jobs, notes, expeditions", () => Navigate(Page.Coop)));
-        rows.Add(Button("Request resync", () =>
+        if (InGame) rows.Add(Button(MenuText.BoardButton, () => Navigate(Page.Coop)));
+        rows.Add(Button(MenuText.RequestResync, () =>
         {
             ModFacade.Server.ReSyncManager.RequestResync();
-            notice = "Resync requested from the host.";
+            notice = MenuText.ResyncRequested;
         }));
-        rows.Add(Button("Settings", () => Navigate(Page.Settings), alternative: true));
-        rows.Add(Button("Disconnect", () => ModFacade.Client.Disconnect(), alternative: true));
+        rows.Add(Button(MenuText.Settings, () => Navigate(Page.Settings), alternative: true));
+        rows.Add(Button(MenuText.Disconnect, () => ModFacade.Client.Disconnect(), alternative: true));
     }
 
     [HideFromIl2Cpp]
     private void AddSettingsPage(List<UiNode> rows, MultiplayerUI ui)
     {
-        rows.Add(Heading(ui.IsFirstTimeSetup ? "Welcome! Choose your name" : "Settings"));
-        rows.Add(LabeledInput("Username", usernameInput, "Player", v => usernameInput = v));
+        rows.Add(Heading(MenuText.SettingsHeading(ui.IsFirstTimeSetup)));
+        rows.Add(LabeledInput(MenuText.Username, usernameInput, MenuText.DefaultName, v => usernameInput = v));
         rows.Add(Tabs(
-            ("Palette", colorMode == ColorMode.Palette, () => SetColorMode(ColorMode.Palette)),
-            ("Hex code", colorMode == ColorMode.Code, () => SetColorMode(ColorMode.Code)),
-            ("Picker", colorMode == ColorMode.Picker, () => SetColorMode(ColorMode.Picker)),
-            ("Random", false, () => { colorInput = ColorUtil.RandomHexColor(); SyncPickerFromInput(); Rebuild(); })));
+            (MenuText.TabPalette, colorMode == ColorMode.Palette, () => SetColorMode(ColorMode.Palette)),
+            (MenuText.TabHex, colorMode == ColorMode.Code, () => SetColorMode(ColorMode.Code)),
+            (MenuText.TabPicker, colorMode == ColorMode.Picker, () => SetColorMode(ColorMode.Picker)),
+            (MenuText.TabRandom, false, () => { colorInput = ColorUtil.RandomHexColor(); SyncPickerFromInput(); Rebuild(); })));
         rows.Add(Label(PreviewText()));
         switch (colorMode)
         {
@@ -879,7 +910,7 @@ internal sealed partial class LycoreiaMenu
                 AddPalette(rows);
                 break;
             case ColorMode.Code:
-                rows.Add(LabeledInput("Name color (hex)", colorInput, "FF8800", v =>
+                rows.Add(LabeledInput(MenuText.NameColor, colorInput, "FF8800", v =>
                 {
                     colorInput = v;
                     if (previewText)
@@ -892,32 +923,32 @@ internal sealed partial class LycoreiaMenu
         }
 
         rows.Add(CheckboxPair(
-            "Allow cheats (host)", allowCheatsInput, v => allowCheatsInput = v,
-            "Disable achievements", disableAchievementsInput, v => disableAchievementsInput = v));
+            MenuText.AllowCheats, allowCheatsInput, v => allowCheatsInput = v,
+            MenuText.DisableAchievements, disableAchievementsInput, v => disableAchievementsInput = v));
         // Saved right away: they only change what friends can do to this player.
         rows.Add(CheckboxPair(
-            "Friends can vac me", ModFacade.FriendsCanVacMe, v => ModFacade.SetConfigValue("friends_can_vac_me", v),
-            "Friends can kick me (V)", ModFacade.FriendsCanKickMe, v => ModFacade.SetConfigValue("friends_can_kick_me", v)));
+            MenuText.FriendsVac, ModFacade.FriendsCanVacMe, v => ModFacade.SetConfigValue("friends_can_vac_me", v),
+            MenuText.FriendsKick, ModFacade.FriendsCanKickMe, v => ModFacade.SetConfigValue("friends_can_kick_me", v)));
         // The FOV module has its own page (the settings page is already at the panel's height limit).
-        rows.Add(Button("Widescreen FOV", () => Navigate(Page.WidescreenFov), alternative: true));
-        rows.Add(Button("Save", () =>
+        rows.Add(Button(MenuText.WidescreenHeading, () => Navigate(Page.WidescreenFov), alternative: true));
+        rows.Add(Button(MenuText.Save, () =>
         {
             ui.NativeSaveSettings(usernameInput, colorInput, allowCheatsInput, disableAchievementsInput);
             if (string.IsNullOrWhiteSpace(ui.NativeLastError))
             {
-                notice = "Settings saved.";
+                notice = MenuText.SettingsSaved;
                 page = Page.Home;
             }
             Rebuild();
         }));
         AddError(rows, ui.NativeLastError);
         if (!ui.IsFirstTimeSetup)
-            rows.Add(Button("Back", () => Navigate(Page.Home), alternative: true));
+            rows.Add(Button(MenuText.Back, () => Navigate(Page.Home), alternative: true));
     }
 
     [HideFromIl2Cpp]
     private string PreviewText()
-        => $"Preview: <color=#{SafeColor(colorInput)}>{(string.IsNullOrWhiteSpace(usernameInput) ? "Player" : usernameInput)}</color>" +
+        => $"{MenuText.Preview} <color=#{SafeColor(colorInput)}>{(string.IsNullOrWhiteSpace(usernameInput) ? MenuText.DefaultName : usernameInput)}</color>" +
            $"  <alpha=#88>#{SafeColor(colorInput)}";
 
     [HideFromIl2Cpp]
@@ -1111,7 +1142,7 @@ internal sealed partial class LycoreiaMenu
 
         foreach (var text in content!.GetComponentsInChildren<TMP_Text>(true))
         {
-            if (text.text.StartsWith("Preview:", StringComparison.Ordinal))
+            if (text.text.StartsWith(MenuText.Preview, StringComparison.Ordinal))
                 previewText = text;
         }
 
@@ -1296,9 +1327,9 @@ internal sealed partial class LycoreiaMenu
     private static void AddPlayers(List<UiNode> rows)
     {
         var players = Roster.GetAllPlayers().ToList();
-        rows.Add(Heading($"Players ({players.Count})"));
+        rows.Add(Heading(MenuText.Players(players.Count)));
         foreach (var player in players)
-            rows.Add(Label(string.IsNullOrEmpty(player.Username) ? "(unnamed player)" : player.Username));
+            rows.Add(Label(string.IsNullOrEmpty(player.Username) ? MenuText.Unnamed : player.Username));
     }
 
     [HideFromIl2Cpp]
@@ -1313,18 +1344,18 @@ internal sealed partial class LycoreiaMenu
     private void AddWidescreenFovPage(List<UiNode> rows)
     {
         var fov = Features.WidescreenFov.WidescreenFov.Fov;
-        rows.Add(Heading("Widescreen FOV"));
-        rows.Add(Label("Field of view is measured across a 16:9 screen; wider screens see more at the sides.",
+        rows.Add(Heading(MenuText.WidescreenHeading));
+        rows.Add(Label(MenuText.WidescreenInfo,
             UiColor.TextCategory));
         rows.Add(CheckboxPair(
-            "Use these settings (off = game's own FOV)", Features.WidescreenFov.WidescreenFov.Enabled,
+            MenuText.WidescreenUse, Features.WidescreenFov.WidescreenFov.Enabled,
             v => { Features.WidescreenFov.WidescreenFov.SetEnabled(v); Rebuild(); },
             null, false, null));
-        rows.Add(SliderRow($"Field of view ({Features.WidescreenFov.WidescreenFov.MinFov:F0}-{Features.WidescreenFov.WidescreenFov.MaxFov:F0})",
+        rows.Add(SliderRow(MenuText.FovSlider(Features.WidescreenFov.WidescreenFov.MinFov.ToString("F0"), Features.WidescreenFov.WidescreenFov.MaxFov.ToString("F0")),
             Features.WidescreenFov.WidescreenFov.MinFov, Features.WidescreenFov.WidescreenFov.MaxFov,
             fov, true, Features.WidescreenFov.WidescreenFov.SetFov));
-        rows.Add(Label("Lower values show less, but also stretch the screen edges less.", UiColor.TextCategory));
-        rows.Add(Button("Back", () => Navigate(Page.Settings), alternative: true));
+        rows.Add(Label(MenuText.WidescreenHint, UiColor.TextCategory));
+        rows.Add(Button(MenuText.Back, () => Navigate(Page.Settings), alternative: true));
     }
 
     [HideFromIl2Cpp]

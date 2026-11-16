@@ -16,7 +16,7 @@ namespace Lycoreia.Game.Avatars
     public sealed class AvatarProbe : IFramePump
     {
         public string Name => "avatar-probe";
-        const int MaxChangeLines = 1200; const double SampleEvery = 0.25;
+        const int MaxChangeLines = 1200; const double SampleEvery = 0.5;
         static bool _controllerDumped, _templateDumped; static readonly HashSet<string> _avatarDumped = new HashSet<string>();
         readonly Dictionary<string, string> _last = new Dictionary<string, string>(); int _lines; double _next;
 

@@ -25,6 +25,7 @@ internal static class PlayerPings
     private const float GemHeight = 1.5f;          // gem centre above the spot
     private const float NearSizeDistance = 20f;    // true size up to here, then it grows to stay visible
     private const float MaxGrow = 6f;
+    private const float PingLabelFadeStart = 150f, PingLabelFadeEnd = 300f;   // a ping is meant to be seen across the zone (reach is 300 m)
 
     private sealed class Ping
     {
@@ -32,9 +33,13 @@ internal static class PlayerPings
         public Transform Gem = null!;
         public Transform Pulse = null!;
         public Transform Beam = null!;
-        public Transform Label = null!;
+        public Transform Label = null!;   // anchor of the overlay label (Owned/Ui/WorldLabels): world-space text was smeared by the game's post-processing
+        public string Name = "";
+        public Color LabelColor = Color.white;
+        public Material[] Mats = System.Array.Empty<Material>();
+        public Color[] BaseColors = System.Array.Empty<Color>();
         public Vector3 Position;
-        public float BornAt;
+        public float BornAt, LabelAlpha;
     }
 
     private static readonly Dictionary<string, Ping> Pings = new();
@@ -181,7 +186,7 @@ internal static class PlayerPings
         var (name, color) = NameAndColor(playerId);
         var ping = Build(position, normal.sqrMagnitude > 0.5f ? normal.normalized : Vector3.up, name, color);
         Pings[playerId] = ping;
-        PlayChime(ping.Root);
+        PlayPingSound(ping);
         DiagLog.LogDiagnostic("friend-fun", "ping-shown", $"from={playerId}; pos={position}");
         // the remote avatar points from RemoteAvatars.ShowPing
 #if LYCOREIA_TEST
@@ -209,17 +214,49 @@ internal static class PlayerPings
 
     private static void Remove(string playerId)
     {
-        if (Pings.Remove(playerId, out var old) && old.Root)
-            Object.Destroy(old.Root);
+        Lycoreia.Owned.Components.UI.WorldLabels.Remove("ping:" + playerId);
+        if (Pings.Remove(playerId, out var old))
+        {
+            if (old.Root)
+                Object.Destroy(old.Root);
+            DestroyMaterials(old);
+        }
+    }
+
+    private static void DestroyMaterials(Ping ping)
+    {
+        foreach (var mat in ping.Mats)
+            if (mat)
+                Object.Destroy(mat);
+    }
+
+    /// <summary>Fade alpha for the ping materials and label: eases in over PopIn, eases out over FadeOut.</summary>
+    private static void ApplyAlpha(Ping ping, float alpha)
+    {
+        for (var i = 0; i < ping.Mats.Length; i++)
+        {
+            var mat = ping.Mats[i];
+            if (!mat) continue;
+            var color = ping.BaseColors[i];
+            color.a = alpha;
+            if (mat.HasProperty("_UnlitColor")) mat.SetColor("_UnlitColor", color);
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
+            if (mat.HasProperty("_Color")) mat.SetColor("_Color", color);
+        }
+        ping.LabelAlpha = alpha;
     }
 
     private static void ClearAll()
     {
         if (Pings.Count == 0)
             return;
+        foreach (var id in Pings.Keys) Lycoreia.Owned.Components.UI.WorldLabels.Remove("ping:" + id);
         foreach (var ping in Pings.Values)
+        {
             if (ping.Root)
                 Object.Destroy(ping.Root);
+            DestroyMaterials(ping);
+        }
         Pings.Clear();
         LastAcceptedAt.Clear();
     }
@@ -256,10 +293,11 @@ internal static class PlayerPings
             var bob = Mathf.Sin(age * 2.4f) * 0.12f;
             ping.Gem.localPosition = Vector3.up * (GemHeight + bob);
             ping.Gem.localRotation = Quaternion.Euler(0f, age * 90f, 0f);
+            var fadeIn = Mathf.Clamp01(age / PopIn);
+            ApplyAlpha(ping, fadeIn * fadeIn * (3f - 2f * fadeIn) * fade * fade * (3f - 2f * fade));
             ping.Gem.localScale = Vector3.one * life;
             ping.Label.localPosition = Vector3.up * (GemHeight + 0.85f + bob);
-            ping.Label.localScale = Vector3.one * life;
-            if (camera) ping.Label.rotation = Quaternion.LookRotation(ping.Label.position - camera!.transform.position);
+            Lycoreia.Owned.Components.UI.WorldLabels.Set("ping:" + playerId, ping.Label.position, ping.Name, null, ping.LabelColor, PingLabelFadeStart, PingLabelFadeEnd, 0f, 0.25f, ping.LabelAlpha, Mathf.Lerp(0.8f, 1f, life));
             var beamTop = GemHeight + bob - 0.45f;
             ping.Beam.localPosition = Vector3.up * (beamTop * 0.5f);
             ping.Beam.localScale = new Vector3(0.05f * life, beamTop * 0.5f * fade, 0.05f * life);
@@ -297,6 +335,7 @@ internal static class PlayerPings
         var bright = Material(color * 2.4f);
         var mid = Material(Color.Lerp(color, Color.white, 0.35f) * 1.4f);
         var soft = Material(color * 1.2f);
+        var baseColors = new[] { color * 2.4f, Color.Lerp(color, Color.white, 0.35f) * 1.4f, color * 1.2f };
 
         var gem = new GameObject("Gem").transform;
         gem.SetParent(root.transform, false);
@@ -322,14 +361,6 @@ internal static class PlayerPings
 
         var labelObject = new GameObject("Label");
         labelObject.transform.SetParent(root.transform, false);
-        var label = labelObject.AddComponent<TextMeshPro>();
-        label.text = name;
-        label.alignment = TextAlignmentOptions.Center;
-        label.fontSize = 2.2f;
-        label.outlineWidth = 0.2f;
-        label.outlineColor = new Color32(0, 0, 0, 220);
-        if (pingFont) label.font = pingFont;
-        // the label faces the camera from Tick (the old look-at component is gone)
 
         return new Ping
         {
@@ -338,6 +369,10 @@ internal static class PlayerPings
             Pulse = pulse,
             Beam = beamObject.transform,
             Label = labelObject.transform,
+            Name = name,
+            LabelColor = color,
+            Mats = new[] { bright, mid, soft },
+            BaseColors = baseColors,
             Position = position,
             BornAt = UnityEngine.Time.time,
         };
@@ -370,8 +405,39 @@ internal static class PlayerPings
         if (material.HasProperty("_Color"))
             material.SetColor("_Color", color);
         material.hideFlags = HideFlags.HideAndDontSave;
+        EnableTransparency(material);
         return material;
     }
+
+    /// <summary>HDRP/Unlit alpha blending (what the material inspector sets for Transparent), so the colour alpha fades the ping. Property names are checked; a shader without them stays opaque.</summary>
+    private static void EnableTransparency(Material material)
+    {
+        try
+        {
+            if (!material.HasProperty("_SurfaceType")) return;
+            material.SetFloat("_SurfaceType", 1f);
+            material.SetFloat("_BlendMode", 0f);
+            if (material.HasProperty("_SrcBlend")) material.SetFloat("_SrcBlend", 5f);
+            if (material.HasProperty("_DstBlend")) material.SetFloat("_DstBlend", 10f);
+            if (material.HasProperty("_ZWrite")) material.SetFloat("_ZWrite", 0f);
+            if (material.HasProperty("_AlphaCutoffEnable")) material.SetFloat("_AlphaCutoffEnable", 0f);
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.EnableKeyword("_BLENDMODE_ALPHA");
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.renderQueue = 3000;
+            if (!transparencyLogged)
+            {
+                transparencyLogged = true;
+                OwnedLog.LogMessage("ping materials: HDRP transparent alpha blending enabled");
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.LogDiagnostic("friend-fun", "ping-alpha-error", ex.Message);
+        }
+    }
+
+    private static bool transparencyLogged;
 
     private static void EnsureAssets()
     {
@@ -454,6 +520,21 @@ internal static class PlayerPings
     {
         (0f, 1f), (6f, 0.9f), (20f, 0.65f), (60f, 0.42f), (130f, 0.22f), (200f, 0.08f), (250f, 0f),
     };
+
+    /// <summary>A native SECTR cue played at the spot when one matches by name; else the synthesized chime.</summary>
+    private static void PlayPingSound(Ping ping)
+    {
+        try
+        {
+            if (Lycoreia.Owned.Fx.NativeFx.PlayCue(Lycoreia.Owned.Fx.FxCue.Ping, ping.Position))
+                return;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.LogDiagnostic("friend-fun", "ping-sound-error", ex.Message);
+        }
+        PlayChime(ping.Root);
+    }
 
     private static void PlayChime(GameObject root)
     {

@@ -202,7 +202,7 @@ namespace Lycoreia.Game.Avatars
     public sealed partial class RemoteAvatar
     {
         public readonly string PlayerId; public string Name; public readonly GameObject Root; public readonly Transform transform;
-        internal readonly Animator animator; readonly TextMesh _label; readonly Transform _labelRoot;
+        internal readonly Animator animator; readonly Transform _labelRoot; string _tagName;   // the nametag is an overlay label (Owned/Ui/WorldLabels), _labelRoot only anchors it above the head
         public readonly AvatarSmoother Smoother = new AvatarSmoother();
         public Vector3 MapPosition;
         public int SceneGroup = -1; public bool HasState; public bool Moving, Sprinting; public int Airborne; public float MoveX, MoveZ, SpeedX, SpeedZ;
@@ -226,8 +226,7 @@ namespace Lycoreia.Game.Avatars
             animator = Root.GetComponent<Animator>() ?? Root.GetComponentInChildren<Animator>(true);        // the one StripMenuProps kept enabled
             _renderers = Root.GetComponentsInChildren<Renderer>(true);
             var labelGo = new GameObject("Lycoreia.Nametag"); _labelRoot = labelGo.transform; _labelRoot.SetParent(transform, false); _labelRoot.localPosition = Vector3.up * AvatarTemplate.LabelHeight / AvatarTemplate.Scale;
-            _label = labelGo.AddComponent<TextMesh>(); _label.text = Name; _label.anchor = TextAnchor.MiddleCenter; _label.alignment = TextAlignment.Center; _label.characterSize = 0.06f; _label.fontSize = 48; _label.color = Colour;
-            var font = AvatarTemplate.LabelFont(); if (font != null) { _label.font = font; var mr = labelGo.GetComponent<MeshRenderer>(); if (mr != null) mr.sharedMaterial = font.material; }
+            _tagName = TagText();
             Root.SetActive(false);
         }
 
@@ -255,9 +254,10 @@ namespace Lycoreia.Game.Avatars
             }
         }
 
-        public void SetName(string name) { Name = name ?? Name; if (_label != null) _label.text = Lycoreia.Game.Prefs.StreamerMode && PlayerId != Mod.LocalId ? "Player" : Name; }
+        string TagText() => Lycoreia.Game.Prefs.StreamerMode && PlayerId != Mod.LocalId ? "Player" : Name;
+        public void SetName(string name) { Name = name ?? Name; _tagName = TagText(); }
         public string ColourHex;
-        public void SetColour(Color c) { Colour = c; if (_label != null) _label.color = c; }
+        public void SetColour(Color c) { Colour = c; }
         /// <summary>Applies a "#RRGGBB" profile colour (alpha is always opaque); true when it changed.</summary>
         public bool SetColourHex(string hex)
         {
@@ -272,10 +272,11 @@ namespace Lycoreia.Game.Avatars
             SceneGroup = u.SceneGroup; Moving = u.Moving; Sprinting = u.Sprinting; Airborne = u.Airborne; MoveX = u.MoveX; MoveZ = u.MoveZ; SpeedX = u.SpeedX; SpeedZ = u.SpeedZ; HasState = true;
         }
 
+        const float NametagFadeStart = 80f, NametagFadeEnd = 140f;   // nametags stay readable farther than markers (jobs fade 40-60 m)
         public void Tick(double now, float dt, int localScene, Camera cam)
         {
             bool visible = HasState && AvatarRules.Visible(SceneGroup, localScene);
-            if (visible != _shown) { _shown = visible; Root.SetActive(visible); if (!visible) _look?.Hidden(); }   // toggled only on change (never per frame)
+            if (visible != _shown) { _shown = visible; Root.SetActive(visible); if (!visible) { _look?.Hidden(); Lycoreia.Owned.Components.UI.WorldLabels.Remove("p:" + PlayerId); } }   // toggled only on change (never per frame)
             TickGadgetGhost(now, visible);
             if (!visible) return;
             Smoother.Step(now, dt); var p = Smoother.Position;
@@ -284,9 +285,8 @@ namespace Lycoreia.Game.Avatars
             if (animator != null) DriveAnimator();
             if (cam != null && _labelRoot != null)
             {
-                float d = Vector3.Distance(cam.transform.position, _labelRoot.position);
-                _labelRoot.localScale = Vector3.one * AvatarRules.NametagScale(d) / AvatarTemplate.Scale;
-                _labelRoot.rotation = Quaternion.LookRotation(_labelRoot.position - cam.transform.position);
+                _tagName = TagText();   // streamer mode can flip at any time; the overlay only rebuilds text when it changed
+                Lycoreia.Owned.Components.UI.WorldLabels.Set("p:" + PlayerId, _labelRoot.position, _tagName, null, Colour, NametagFadeStart, NametagFadeEnd, 0f, 0.3f);
             }
         }
         static readonly RateLimitedLog Rl = new RateLimitedLog(null, 10_000);
@@ -345,7 +345,7 @@ namespace Lycoreia.Game.Avatars
             lower.rotation = Quaternion.FromToRotation(c - b, wantC - b) * lower.rotation;
         }
 
-        public void Destroy() { try { OwnedDestroy(); } catch { } if (Root != null) UnityEngine.Object.Destroy(Root); }
+        public void Destroy() { try { Lycoreia.Owned.Components.UI.WorldLabels.Remove("p:" + PlayerId); } catch { } try { OwnedDestroy(); } catch { } if (Root != null) UnityEngine.Object.Destroy(Root); }
 
         // hooks the owned partials implement (idle life, kick, hand rig); empty defaults keep the core independent of them
         partial void OwnedSetup();

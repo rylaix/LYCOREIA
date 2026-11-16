@@ -27,9 +27,14 @@ namespace Lycoreia.Compat
         public static void LogError(string m, LogTarget t = LogTarget.Main) => Log.Error(m, t);
         public static void LogDebug(string m, LogTarget t = LogTarget.Main) => Log.Debug(m, t);
         public static void LogDiagnostic(string category, string ev, string details = "") => Mod.Diagnostics?.Record(category, ev, details);
-        static readonly Lycoreia.RateLimitedLog Rl = new Lycoreia.RateLimitedLog(null, 10_000);
+        static readonly System.Collections.Generic.Dictionary<string, long> Last = new();
+        // rc3: a fresh RateLimitedLog per call never limited anything (every rate-keyed diagnostic hit the disk every frame); one shared table now.
         public static void LogDiagnostic(string category, string ev, string details, string rateKey, int perKeyMilliseconds)
-        { if (new Lycoreia.RateLimitedLog(null, perKeyMilliseconds).ShouldEmit(rateKey, out _) && Rl != null) Mod.Diagnostics?.Record(category, ev, details); }
+        {
+            long now = Environment.TickCount64;
+            lock (Last) { if (Last.TryGetValue(rateKey, out var t) && now - t < perKeyMilliseconds) return; Last[rateKey] = now; }
+            Mod.Diagnostics?.Record(category, ev, details);
+        }
     }
     public enum OwnedLogTarget { Main, Sensitive, Both, Neither }
 }

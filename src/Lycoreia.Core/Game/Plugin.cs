@@ -49,7 +49,7 @@ namespace Lycoreia.Game
             _initStarted = true;
             Prefs.Create();
             Log.Console = (lv, m) => { switch (lv) { case LogLevel.Warning: MelonLoader.MelonLogger.Warning(m); break; case LogLevel.Error: MelonLoader.MelonLogger.Error(m); break; default: MelonLoader.MelonLogger.Msg(m); break; } };
-            Mod.Init(MelonLoader.Utils.MelonEnvironment.UserDataDirectory, diagnostics: Prefs.Get<bool>(Settings.DevDiagnostics));
+            Mod.Init(MelonLoader.Utils.MelonEnvironment.UserDataDirectory, diagnostics: Prefs.Get<bool>(Settings.DevDiagnostics) || BuildInfo.Diagnostics);
             Log.PacketSizes = Prefs.Get<bool>(Settings.PacketSizeLogging);
             Mod.Session.LocalName = Prefs.Username; Mod.Session.AllowCheats = Prefs.AllowCheats;
             CheckGameVersion();

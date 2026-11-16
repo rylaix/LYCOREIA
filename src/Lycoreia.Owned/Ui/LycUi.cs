@@ -113,6 +113,103 @@ internal static class UiFonts
             return cached;
         }
     }
+
+    // rc3 fix: the game's default TMP font is "Lexend-Regular (Latin)" with no Cyrillic glyphs, so Russian co-op text drew only
+    // punctuation and digits. The game renders Russian through a separate font asset; we add any loaded font that really has the
+    // glyphs as a fallback (on our default font and in TMP's global fallback list), so every TMP text of ours can draw Cyrillic.
+    private static bool cyrillicReady, cyrillicMissLogged;
+    private static float cyrillicRetryAt = -1f;
+    private const char CyrillicProbe = (char)0x0416;   // Cyrillic capital Zhe
+
+    /// <summary>
+    /// Weight match for Lexend-Regular body text: regular/book weights first, heavy/bold/italic/display faces last
+    /// (rc3: picking "NotoSans-Black (Cyrillic)" made Russian text look bold and oversized).
+    /// </summary>
+    internal static int CyrillicScore(string n)
+    {
+        n = (n ?? string.Empty).ToLowerInvariant();
+        var s = 0;
+        if (n.Contains("regular") || n.Contains("book") || n.Contains("normal")) s += 20;
+        if (n.Contains("medium")) s += 8;
+        if (n.Contains("lexend")) s += 6;
+        if (n.Contains("noto") || n.Contains("sans")) s += 4;
+        if (n.Contains("cyrillic")) s += 2;
+        if (n.Contains("semibold")) s -= 10;
+        else if (n.Contains("bold")) s -= 20;
+        if (n.Contains("black") || n.Contains("heavy") || n.Contains("extra") || n.Contains("ultra")) s -= 30;
+        if (n.Contains("light") || n.Contains("thin")) s -= 6;
+        if (n.Contains("italic") || n.Contains("caps") || n.Contains("outline") || n.Contains("shadow") || n.Contains("fallback")) s -= 12;
+        return s;
+    }
+
+    /// <summary>True when Cyrillic text can be drawn with our fonts (adds a fallback font once if needed). Main thread; never throws.</summary>
+    internal static bool EnsureCyrillic()
+    {
+        if (cyrillicReady)
+            return true;
+        try
+        {
+            var now = UnityEngine.Time.unscaledTime;
+            if (now < cyrillicRetryAt)
+                return false;
+            cyrillicRetryAt = now + 3f;
+            var main = Default;
+            if (main && main!.HasCharacter(CyrillicProbe, true, false))
+            {
+                cyrillicReady = true;
+                OwnedLog.LogMessage($"font cyrillic: {main.name} already covers it");
+                return true;
+            }
+
+            TMP_FontAsset? best = null;
+            var bestScore = int.MinValue;
+            var names = new List<string>();
+            foreach (var candidate in Resources.FindObjectsOfTypeAll<TMP_FontAsset>())
+            {
+                if (!candidate || candidate == main)
+                    continue;
+                bool has;
+                try { has = candidate.HasCharacter(CyrillicProbe, false, true); } catch { has = false; }
+                if (!has)
+                    continue;
+                var n = candidate.name ?? string.Empty;
+                var score = CyrillicScore(n);
+                names.Add($"{n}={score}");
+                if (score > bestScore) { best = candidate; bestScore = score; }
+            }
+            if (names.Count > 0)
+                OwnedLog.LogMessage("font cyrillic candidates: " + string.Join(", ", names));
+
+            if (!best)
+            {
+                if (!cyrillicMissLogged) { cyrillicMissLogged = true; OwnedLog.LogWarning("font cyrillic: no loaded font has Cyrillic yet; co-op text stays English until one loads"); }
+                return false;
+            }
+
+            if (main)
+            {
+                var table = main!.fallbackFontAssetTable;
+                if (table == null) { table = new Il2CppSystem.Collections.Generic.List<TMP_FontAsset>(); main.fallbackFontAssetTable = table; }
+                if (!table.Contains(best!)) table.Add(best!);
+            }
+
+            try
+            {
+                var global = TMP_Settings.fallbackFontAssets;
+                if (global != null && !global.Contains(best!)) global.Add(best!);
+            }
+            catch (Exception ex) { OwnedLog.LogWarning("font cyrillic: global fallback not set: " + ex.Message); }
+
+            cyrillicReady = true;
+            OwnedLog.LogMessage($"font cyrillic: fallback '{best!.name}' added to '{(main ? main!.name : "none")}' and TMP global fallbacks");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (!cyrillicMissLogged) { cyrillicMissLogged = true; OwnedLog.LogWarning("font cyrillic check failed: " + ex.Message); }
+            return false;
+        }
+    }
 }
 
 internal static class UiSprites
@@ -356,6 +453,10 @@ internal sealed class UiText : UiNode
     public bool AutoSize;
     public float AutoSizeMin = 14f;
     public float AutoSizeMax = 40f;
+    /// <summary>One line, shrunk to fit, ellipsis as the last resort (tab and button labels: Russian labels are longer than English).</summary>
+    public bool SingleLine;
+    /// <summary>Fixed size, word wrap, no autosize: every row of one style gets the same size (the caller sizes the box with LayoutText).</summary>
+    public bool FixedWrap;
 
     protected override void Build(RectTransform rt)
     {
@@ -368,7 +469,21 @@ internal sealed class UiText : UiNode
         text.color = UiTheme.Get(Color);
         text.alignment = Alignment;
         text.raycastTarget = false;
-        if (AutoSize)
+        if (FixedWrap)
+        {
+            text.enableAutoSizing = false;
+            text.textWrappingMode = TextWrappingModes.Normal;
+            text.overflowMode = TextOverflowModes.Overflow;
+        }
+        else if (SingleLine)
+        {
+            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.overflowMode = TextOverflowModes.Ellipsis;
+            text.enableAutoSizing = true;
+            text.fontSizeMin = AutoSizeMin;
+            text.fontSizeMax = Mathf.Max(AutoSizeMin, FontSize);
+        }
+        else if (AutoSize)
         {
             text.enableAutoSizing = true;
             text.fontSizeMin = AutoSizeMin;
@@ -386,6 +501,13 @@ internal sealed class UiButton : UiNode
 
     protected override void Build(RectTransform rt)
     {
+        // Every label inside a button fits its button: short one-liners (tabs) shrink on one line, long or multi-line ones wrap and shrink.
+        foreach (var child in Children)
+            if (child is UiText label && !label.FixedWrap)
+            {
+                label.AutoSize = true; label.AutoSizeMin = 14f; label.AutoSizeMax = label.FontSize;
+                label.SingleLine = Lycoreia.Text.LayoutText.IsSingleLineLabel(label.Text);
+            }
         var image = AddImage(rt, Color.white, CornerRadius, true);
         var button = rt.gameObject.AddComponent<Button>();
         button.targetGraphic = image;
@@ -394,16 +516,23 @@ internal sealed class UiButton : UiNode
         button.interactable = Interactable;
         UiFx.Attach(rt.gameObject, scale: true, clickOnPointerDown: false);
         var click = OnClick;
+        var labelRt = rt;
         button.onClick.AddListener((UnityAction)(() =>
         {
+            // issue7: the sound, the diagnostics and the gate release must never swallow the click itself; each is isolated.
+            string label = "?";
+            try { var t = labelRt ? labelRt.GetComponentInChildren<TMP_Text>(true) : null; label = t ? t!.text : labelRt ? labelRt.name : "?"; } catch { }
+            try { InputGate.Set("menu", false); } catch { }              // a click on a button always ends text typing; the menu re-asserts it if a field still has focus
+            try { UiSounds.Play(UiSounds.Cue.Click); } catch { }
             try
             {
-                UiSounds.Play(UiSounds.Cue.Click);
                 click?.Invoke();
+                OwnedLog.LogDiagnostic("menu", "button-click", $"label={label}; outcome=ok; handler={(click != null)}");
             }
             catch (Exception ex)
             {
-                OwnedLog.LogError($"Lycoreia menu action failed: {ex}");
+                try { OwnedLog.LogDiagnostic("menu", "button-click", $"label={label}; outcome=exception; type={ex.GetType().Name}"); } catch { }
+                OwnedLog.LogError($"Lycoreia menu action failed ({label}): {ex}");
             }
         }));
     }

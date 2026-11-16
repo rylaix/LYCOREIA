@@ -1,5 +1,48 @@
 # Changelog
 
+## [2.1.0-rc4] - 2026-11-16 (release candidate, testers wanted)
+
+Fourth test build of 2.1.0, again the diagnostic (deeplog) build only. It includes everything from the unreleased rc2 and rc3 builds. Every player in a session needs 2.1.0-rc4: it refuses rc1 and any other build (there is a new network message).
+
+**Please send logs.** After a session, send `UserData/Lycoreia/latest.log` and `UserData/Lycoreia/diagnostics.jsonl` from **both** players (host and guest) on our Discord, with a short note of what went wrong and roughly when. If Lycoreia cannot write to `UserData/Lycoreia`, the MelonLoader log now says where it writes instead ("log file: ...").
+
+Thanks to **mankwa** and **afficti0n** for reporting the sudden chicken bursts and the corrals that did not sync. Both were fixed in 2.1.0-rc1 (see "Food eaten by a slime disappears for everyone" and "Corrals and plot upgrades ... appear for the guest" below).
+
+Please try especially:
+- The co-op wheel (hold the middle mouse button), including the new job and note actions.
+- Planting a garden while your friend is far away from the ranch.
+- Playing with the game set to Russian.
+- Boost jumps: your friend should now see and hear them too.
+
+### New
+- Co-op wheel redesign: round wheel with icons, sounds, a hover highlight and a hold prompt. It works with a gamepad as well (hold a free button and use the stick).
+- Act on jobs and notes from the wheel: aim at a job or note (or at its marker) and claim, drop, finish or remove it without opening the pause menu.
+- Co-op events (job posted, claimed or done, new note, expedition started, completed or failed) show as on-screen notices instead of only chat lines.
+- Expedition tracker: a HUD panel with a progress bar, a timer that turns red near the end, and a chime when the goal is reached. It hides with the HUD.
+- Jobs appear on the world map, with a label when you point at them.
+- Boost jump effects: a puff of dust, a sound, and a squash of the friend you jumped off, seen by every player.
+- Pings fade in and out and play a sound.
+- "What's new" opens once after an update. The main-menu update banner matches the game's style; in game, an update shows as a notice.
+- One-time hints for the co-op wheel and the boost jump.
+- Co-op board: icons per job type, a "Recently done" list with who finished each job, and a hint when the board is empty.
+- Russian translation of the co-op features and the Lycoreia menu, using the game's own Russian terms.
+
+### Fixed
+- A garden planted while the other player was far from the ranch now appears when they come back.
+- Buttons in the Lycoreia menu could stop responding to clicks (for example after editing the nickname).
+- Lycoreia logs could silently fail to be written; there is now a fallback folder and the MelonLoader log names it.
+- With the game in Russian, mod text showed only punctuation.
+- Nametags, job and note labels and ping labels are sharp and readable, and fade with distance instead of staying visible across the map.
+- The co-op wheel could stop opening after a few presses.
+- Typing in a menu text field caused stutter.
+- Shorter freeze when joining a world with many treasure pods.
+
+### Known issues
+- The door, Tarr and fruit fixes from rc1 are still waiting for confirmation in real sessions.
+- Some Russian text may still read unnaturally; corrections are welcome.
+- Plort collectors only run while the host has that plot loaded.
+- The guest's expedition timer uses the guest's clock.
+
 ## [2.1.0-rc1] - 2026-11-13 (release candidate, testers wanted)
 
 This is a test build of 2.1.0, shipped only as the diagnostic (deeplog) build so we can fix what you find. Every player in a session needs 2.1.0-rc1: it refuses 2.0.x and any other build.
@@ -28,9 +71,9 @@ Please especially try:
 ### Fixed
 - Silos, corral plort collectors and auto-feeders sync; collectors no longer double plorts.
 - Gates, ranch expansions, plort statue doors, puzzle slots, prisma barriers and trigger switches opened by one player open for everyone.
-- Corrals and plot upgrades from saves made before playing together appear for the guest.
+- Corrals and plot upgrades from saves made before playing together appear for the guest (thanks mankwa and afficti0n for reporting).
 - Ringtails no longer multiply at dawn and dusk.
-- Food eaten by a slime disappears for everyone (no endless chickens).
+- Food eaten by a slime disappears for everyone (no endless chickens; thanks mankwa and afficti0n for reporting).
 - Tarrs can be killed by either player, not only by the one whose game controls them.
 - Fruit harvested by one player no longer floats in the air for the other.
 - Remote players' heads no longer spin; avatars no longer spin during short lag.

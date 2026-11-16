@@ -19,6 +19,23 @@ namespace Lycoreia.Game.Avatars
         public static float Boosted(float verticalSpeed) => Math.Min(verticalSpeed * Factor, MaxBoostedSpeed);
     }
 
+    /// <summary>Pure squash curve of the avatar stood on (visual only): press down fast, spring back with a small overshoot, exactly 1 at the end.</summary>
+    public static class SquashCurve
+    {
+        public const float Duration = 0.4f, Press = 0.1f, Depth = 0.22f;
+        /// <summary>Vertical scale factor at time t seconds after the jump.</summary>
+        public static float Y(float t)
+        {
+            if (t <= 0f || t >= Duration) return 1f;
+            float k;
+            if (t < Press) { float u = t / Press; k = u * u * (3f - 2f * u); }
+            else { float s = t - Press; k = (float)(Math.Exp(-s / 0.07) * Math.Cos(s * 18.0)); }
+            return 1f - Depth * k;
+        }
+        /// <summary>Horizontal factor: widens as it flattens (roughly volume preserving).</summary>
+        public static float Xz(float t) => 1f + (1f - Y(t)) * 0.5f;
+    }
+
     public sealed class AvatarBodies : IFramePump
     {
         public string Name => "avatar-bodies";
@@ -27,18 +44,114 @@ namespace Lycoreia.Game.Avatars
         static readonly Dictionary<string, CapsuleCollider> _bodies = new Dictionary<string, CapsuleCollider>();
         static readonly HashSet<int> _bodyIds = new HashSet<int>();
         static int _layer = -1; static IntPtr _layerFor;
-        double _lastOnFriend = double.NegativeInfinity; bool _boosted, _wasGrounded; static bool _toldStanding;
+        string _lastFriendId; double _lastOnFriend = double.NegativeInfinity; bool _boosted, _wasGrounded; static bool _toldStanding;
 
         public static bool IsBody(Collider c) { try { return c != null && _bodyIds.Contains(c.GetInstanceID()); } catch { return false; } }
 
         public void Pump()
         {
             var pl = SceneContext.Instance != null ? SceneContext.Instance.Player : null;
-            if (pl == null || !Mod.IsNetworkActive) { if (_bodies.Count > 0) Clear(); return; }
+            EnsureSync();
+            if (pl == null || !Mod.IsNetworkActive) { EndSquash(); EndNudge(); if (_bodies.Count > 0) Clear(); return; }
+            TickSquash(); TickNudge();
             var cc = pl.GetComponent<SRCharacterController>(); var motor = cc != null ? cc.Motor : null; if (motor == null) return;
             EnsureBodies(motor);
             Boost(cc, motor);
         }
+
+        // ---- boost-fx message (cosmetic): sent on a local boost, played here for boosts seen from other seats
+        static Lycoreia.Players.BoostFxSync _sync; static Lycoreia.Session _syncFor;
+
+        sealed class BoostWorld : Lycoreia.Players.IBoostFxWorld { public void PlayBoostFx(Lycoreia.Net.Messages.BoostFx fx) => PlayRemoteBoost(fx); }
+
+        static void EnsureSync()
+        {
+            var s = Mod.Session; if (s == null || ReferenceEquals(_syncFor, s)) return;
+            try
+            {
+                _syncFor = s; _sync = new Lycoreia.Players.BoostFxSync(s, new BoostWorld(), () => Time.unscaledTimeAsDouble);
+                _sync.Trace += (ev, detail) => { Mod.Diagnostics?.Record("players", "boost-fx", $"{ev}; {detail}; sent={_sync.Sent}; received={_sync.Received}; played={_sync.Played}; rejected={_sync.Rejected}"); Log.Info($"boost-fx {ev}: {detail}"); };
+            }
+            catch (Exception e) { Rl.Warn("boost-fx", "boost-fx sync failed: " + e.Message); }
+        }
+
+        /// <summary>A boost seen from another seat: puff and sound at the jumper's feet, squash of the stood-on avatar (or a small camera dip when that is us).</summary>
+        static void PlayRemoteBoost(Lycoreia.Net.Messages.BoostFx fx)
+        {
+            try
+            {
+                var at = new Vector3(fx.Position.X, fx.Position.Y, fx.Position.Z);
+                Lycoreia.Owned.Fx.NativeFx.Puff(at);
+                Lycoreia.Owned.Fx.NativeFx.PlayCue(Lycoreia.Owned.Fx.FxCue.Jump, at);
+                if (!string.IsNullOrEmpty(fx.StoodOnId) && fx.StoodOnId == Mod.LocalId) { _nudgeStart = Time.time; }
+                else StartSquash(fx.StoodOnId);
+            }
+            catch (Exception e) { Rl.Warn("boost-fx", "remote boost FX failed: " + e.Message); }
+        }
+
+        // the local first-person camera dips a few centimetres when a friend boost-jumps off us (removed exactly again; the offset ends at 0)
+        static float _nudgeStart = -1f; static Vector3 _nudgeApplied;
+
+        static void TickNudge()
+        {
+            if (_nudgeStart < 0f && _nudgeApplied == Vector3.zero) return;
+            try
+            {
+                var cam = Camera.main; if (cam == null) { _nudgeStart = -1f; _nudgeApplied = Vector3.zero; return; }
+                var t = cam.transform; t.localPosition -= _nudgeApplied; _nudgeApplied = Vector3.zero;
+                if (_nudgeStart < 0f) return;
+                float e = Time.time - _nudgeStart; if (e >= SquashCurve.Duration) { _nudgeStart = -1f; return; }
+                _nudgeApplied = new Vector3(0f, -(1f - SquashCurve.Y(e)) * 0.25f, 0f); t.localPosition += _nudgeApplied;
+            }
+            catch (Exception e) { Rl.Warn("nudge", "camera nudge failed: " + e.Message); _nudgeStart = -1f; _nudgeApplied = Vector3.zero; }
+        }
+
+        static void EndNudge() { if (_nudgeStart < 0f && _nudgeApplied == Vector3.zero) return; _nudgeStart = -1f; TickNudge(); }
+
+        // ---- squash of the avatar stood on (visual only: the remote avatar's model scale; the body capsule is counter-scaled so its world size is unchanged)
+        static RemoteAvatar _sqAvatar; static string _sqId; static Vector3 _sqRoot, _sqBody; static Transform _sqBodyT; static float _sqStart; static float _sqY = 1f;
+
+        static void StartSquash(string id)
+        {
+            try
+            {
+                EndSquash();
+                if (id == null || !RemoteAvatars.All.TryGetValue(id, out var a) || a?.Root == null || !_bodies.TryGetValue(id, out var cap) || cap == null) return;
+                _sqAvatar = a; _sqId = id; _sqRoot = a.transform.localScale; _sqBodyT = cap.transform; _sqBody = _sqBodyT.localScale; _sqStart = Time.time; _sqY = 1f;
+            }
+            catch (Exception e) { Rl.Warn("squash", "squash start failed: " + e.Message); _sqAvatar = null; }
+        }
+
+        static void TickSquash()
+        {
+            if (_sqAvatar == null) return;
+            try
+            {
+                if (_sqAvatar.Root == null || _sqBodyT == null) { _sqAvatar = null; _sqY = 1f; return; }   // avatar gone: nothing to restore
+                float t = Time.time - _sqStart;
+                if (t >= SquashCurve.Duration) { EndSquash(); return; }
+                float y = SquashCurve.Y(t), xz = SquashCurve.Xz(t);
+                _sqAvatar.transform.localScale = new Vector3(_sqRoot.x * xz, _sqRoot.y * y, _sqRoot.z * xz);
+                _sqBodyT.localScale = new Vector3(_sqBody.x / xz, _sqBody.y / y, _sqBody.z / xz);
+                _sqY = y;
+            }
+            catch (Exception e) { Rl.Warn("squash", "squash failed: " + e.Message); EndSquash(); }
+        }
+
+        /// <summary>Restores the exact original scales (model and body capsule). Safe to call anytime.</summary>
+        static void EndSquash()
+        {
+            if (_sqAvatar == null) return;
+            try
+            {
+                if (_sqAvatar.Root != null) _sqAvatar.transform.localScale = _sqRoot;
+                if (_sqBodyT != null) _sqBodyT.localScale = _sqBody;
+            }
+            catch { }
+            _sqAvatar = null; _sqBodyT = null; _sqY = 1f;
+        }
+
+        static float SquashOf(Transform avatar) => _sqAvatar != null && _sqAvatar.transform == avatar ? _sqY : 1f;
 
         static void Clear() { foreach (var b in _bodies.Values) try { if (b != null) UnityEngine.Object.Destroy(b.gameObject); } catch { } _bodies.Clear(); _bodyIds.Clear(); }
 
@@ -80,10 +193,16 @@ namespace Lycoreia.Game.Avatars
         static void Fit(CapsuleCollider cap, KinematicCharacterMotor motor, Transform avatar)
         {
             // the avatar root is scaled (AvatarTemplate.Scale): divide so the world size is exactly the player's capsule
-            float s = avatar != null ? Math.Max(1e-3f, avatar.lossyScale.y) : 1f;
+            float s = avatar != null ? Math.Max(1e-3f, avatar.lossyScale.y / SquashOf(avatar)) : 1f;
             float r = motor.CapsuleRadius / s, h = motor.CapsuleHeight / s; var c = motor.CharacterTransformToCapsuleCenter / s;
             if (Math.Abs(cap.radius - r) > 1e-3f) cap.radius = r; if (Math.Abs(cap.height - h) > 1e-3f) cap.height = h;
             if ((cap.center - c).sqrMagnitude > 1e-6f) cap.center = c; cap.direction = 1;
+        }
+
+        static string FriendIdOf(Collider c)
+        {
+            try { int id = c.GetInstanceID(); foreach (var kv in _bodies) if (kv.Value != null && kv.Value.GetInstanceID() == id) return kv.Key; } catch { }
+            return null;
         }
 
         void Boost(SRCharacterController cc, KinematicCharacterMotor motor)
@@ -92,7 +211,7 @@ namespace Lycoreia.Game.Avatars
             if (grounded && IsBody(motor.GroundingStatus.GroundCollider))
             {
                 if (_lastOnFriend < 0 && !_toldStanding) { _toldStanding = true; Log.Info("standing on another player (boost jump ready)"); }
-                _lastOnFriend = now;
+                _lastOnFriend = now; _lastFriendId = FriendIdOf(motor.GroundingStatus.GroundCollider);
             }
             if (grounded) _boosted = false;
             var v = motor.BaseVelocity;
@@ -102,6 +221,15 @@ namespace Lycoreia.Game.Avatars
                 motor.BaseVelocity = new Vector3(v.x, boosted, v.z);
                 Log.Info($"boost jump off a friend: {v.y:0.0} -> {boosted:0.0} m/s");
                 Mod.Diagnostics?.Record("players", "boost-jump", $"from={v.y:0.00}; to={boosted:0.00}");
+                try
+                {
+                    var feet = cc.transform.position;   // presentation only: puff, native jump sound, squash of the player stood on (then published as a BoostFx message for the other seats)
+                    Lycoreia.Owned.Fx.NativeFx.Puff(feet);
+                    Lycoreia.Owned.Fx.NativeFx.PlayCue(Lycoreia.Owned.Fx.FxCue.Jump, feet);
+                    StartSquash(_lastFriendId);
+                    _sync?.Publish(_lastFriendId, new Lycoreia.Net.Vec3(feet.x, feet.y, feet.z), boosted);   // every other seat plays it too
+                }
+                catch (Exception e) { Rl.Warn("boost-fx", "boost jump FX failed: " + e.Message); }
             }
             _wasGrounded = grounded;
         }

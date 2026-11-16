@@ -39,7 +39,7 @@ namespace Lycoreia.Game.World
             Upgrades = new LatchedSystem<LandPlotUpgrade>(s, new PlotUpgradeModel(), m => (UpgradeKey(m.PlotId, m.Upgrade), 1), (k, v) => { var (p, u) = SplitUpgrade(k); return new LandPlotUpgrade { PlotId = p, Upgrade = u }; }, Math.Max,
                 (k, v) => v > 0 && SplitUpgrade(k).plot.Length > 0 && SplitUpgrade(k).upgrade > 0);
             Leases = new KeyLeases(s, snap);
-            Gardens = new GardenSync(s) { Leases = Leases, OnCrop = ApplyCrop, OnTimer = ApplyTimer };
+            Gardens = new GardenSync(s) { Leases = Leases, OnCrop = OnCropState, OnTimer = ApplyTimer };
             snap.Register(Lycoreia.Snapshot.SnapStep.LandPlots, ctx => ctx.Send(BuildSnapshot()));
             s.Node.On<InitialLandPlots>(Side.Guest, (c, m) => ApplySnapshot(m));
             s.ServerStarted += () => { ClearAll(); Leases.HostClaimAll(GardenIds()); };
@@ -47,7 +47,7 @@ namespace Lycoreia.Game.World
             s.ClientDisconnected += _ => { ClearAll(); GardenJoinCheck.Reset(); };   // offline every hook passes: gardens run vanilla again
             Mod.Guest.SnapshotApplied += () => { if (_joinCheckArmed) { _joinCheckArmed = false; GardenJoinCheck.Schedule(); } };
         }
-        void ClearAll() { PlotTypes.Clear(); Upgrades.Clear(); Gardens.Clear(); Leases.Clear(); _cropNextFrame.Clear(); _cropDeferredFrame.Clear(); _cropTries.Clear(); _loadedSince.Clear(); _claimedAt.Clear(); _convergeTries.Clear(); }
+        void ClearAll() { PlotTypes.Clear(); Upgrades.Clear(); Gardens.Clear(); Leases.Clear(); _cropNextFrame.Clear(); _cropDeferredFrame.Clear(); _cropTries.Clear(); _pending.Clear(); _loadedSince.Clear(); _claimedAt.Clear(); _convergeTries.Clear(); _cropConverge.Clear(); }
 
         // ---------------------------------------------------------------- keys and lookups
         static string UpgradeKey(string plot, int upgrade) => (plot ?? "") + "|" + upgrade;
@@ -132,8 +132,20 @@ namespace Lycoreia.Game.World
         public void OnLocalUpgrade(LandPlot plot, LandPlot.Upgrade up) { if (Applying.Active || plot == null) return; var id = PlotIdOf(plot); if (id != null) { Upgrades.Publish(UpgradeKey(id, (int)up), 1); PlotLog(id, $"local upgrade {up}: published"); } else PlotLog("?", $"local upgrade {up} on a plot without location: not published"); }
 
         // ---------------------------------------------------------------- crops
-        public void OnLocalPlant(GardenCatcher catcher, IdentifiableType crop) { if (Applying.Active || crop == null) return; var id = PlotIdOf(catcher); int t = ActorTypes.IdOf(crop); if (id != null && t > 0) Gardens.LocalCrop(id, id, t); }
-        public void OnLocalClear(LandPlot plot) { if (Applying.Active || plot == null || plot.TypeId != LandPlot.Id.GARDEN) return; var id = PlotIdOf(plot); if (id != null && Gardens.CropOf(id) > 0) Gardens.LocalCrop(id, id, 0); }
+        public void OnLocalPlant(GardenCatcher catcher, IdentifiableType crop) { if (Applying.Active || crop == null) return; var id = PlotIdOf(catcher); int t = ActorTypes.IdOf(crop); if (id != null && t > 0) { GardenLog("garden-publish", id, $"plant {crop.name} (type {t})"); PublishLocal(id, t); } }
+        public void OnLocalClear(LandPlot plot) { if (Applying.Active || plot == null || plot.TypeId != LandPlot.Id.GARDEN) return; var id = PlotIdOf(plot); if (id != null && Gardens.CropOf(id) > 0) { GardenLog("garden-publish", id, "clear"); PublishLocal(id, 0); } }
+        bool _publishing;
+        void PublishLocal(string id, int type) { _publishing = true; try { Gardens.LocalCrop(id, id, type); } finally { _publishing = false; } }
+        readonly GardenPending _pending = new GardenPending();
+        static string CropName(int t) => t > 0 && ActorTypes.TryGetType(t, out var c) && c != null ? $"{c.name} (type {t})" : t.ToString();
+        /// <summary>Garden sync event at info level plus a diagnostics record (issue6: nothing about crops was logged).</summary>
+        static void GardenLog(string kind, string plotId, string what) { Log.Info($"garden {plotId}: {kind}: {what}"); Mod.Diagnostics?.Record("world", kind, $"plot={plotId}; {what}"); }
+        /// <summary>Crop state from the revision stream (a received message, a snapshot entry or our own local plant).</summary>
+        void OnCropState(string plotId, int type)
+        {
+            if (!_publishing) GardenLog("garden-receive", plotId, $"crop {CropName(type)}");
+            ApplyCrop(plotId, type);
+        }
         void ApplyCrop(string plotId, int type)
         {
             try
@@ -143,11 +155,21 @@ namespace Lycoreia.Game.World
                 var plot = PlotObject(plotId);
                 using (Applying.Enter())
                 {
-                    if (plot == null) { m.resourceGrowerDefinition = crop != null ? GrowerFor(crop) : null; return; }   // planted from the model when the plot loads
+                    if (plot == null)
+                    {
+                        // The plot object is inactive or not built on this seat (ranch region hibernating, issue6): keep the host's truth in the model
+                        // AND remember it, the plot is not rebuilt from the model on wake when it already exists, so the pump plants it then.
+                        var grower = crop != null ? GrowerFor(crop) : null; m.resourceGrowerDefinition = grower;
+                        if (!_pending.Has(plotId)) _pending.Add(plotId);
+                        GardenLog("garden-deferred", plotId, $"plot not loaded: crop {CropName(type)} kept in the model{(crop != null && grower == null ? " (no grower definition loaded)" : "")}, applied when it loads");
+                        return;
+                    }
+                    _pending.Remove(plotId);
                     var current = plot.GetAttachedCropId();
                     if (crop != null && current != null && current.ReferenceId == crop.ReferenceId) return;
                     if (current != null || plot.HasAttached())
                     {
+                        GardenLog("garden-applied", plotId, current != null ? $"replacing {current.name}" : "clearing an attached object");
                         // The catcher rejects an occupied plot, and Unity destroys the old crop only at the end of the frame: planting in
                         // this frame produced nothing and was never retried (issue 2026-11-09). Clear now, plant on a later frame.
                         plot.DestroyAttached();
@@ -162,7 +184,7 @@ namespace Lycoreia.Game.World
                         if (tries <= MaxCropTries) { _cropTries[plotId] = tries; DeferCrop(plotId); }
                         else { _cropTries.Remove(plotId); Rl.Warn("garden-plant-" + plotId, $"garden {plotId}: plant {crop.name} produced nothing after {MaxCropTries} tries"); }
                     }
-                    else _cropTries.Remove(plotId);
+                    else { _cropTries.Remove(plotId); GardenLog("garden-applied", plotId, $"planted {crop.name}"); }
                 }
             }
             catch (Exception e) { Rl.Warn("garden-crop", $"garden {plotId} crop apply failed: {e.Message}"); }
@@ -196,7 +218,7 @@ namespace Lycoreia.Game.World
                 var m = kv.Value; if (m == null || kv.Key == null) continue;
                 var r = new PlotRecord { Id = kv.Key, Type = (int)m.typeId, Upgrades = new List<int>() };
                 try { if (m.upgrades != null) foreach (var u in m.upgrades) r.Upgrades.Add((int)u); } catch { }
-                if (m.typeId == LandPlot.Id.GARDEN) { r.Crop = ActorTypes.IdOf(m.resourceGrowerDefinition?._primaryResourceType); r.CropRevision = Gardens.SnapshotRevision(kv.Key); }
+                if (m.typeId == LandPlot.Id.GARDEN) { int cs = Gardens.CropOf(kv.Key); r.Crop = cs > 0 ? cs : ActorTypes.IdOf(m.resourceGrowerDefinition?._primaryResourceType); r.CropRevision = Gardens.SnapshotRevision(kv.Key); }
                 msg.Items.Add(r);
             }
             Log.Info($"land plots snapshot sent: {DescribePlots(msg)}");
@@ -232,9 +254,38 @@ namespace Lycoreia.Game.World
                 int frame = Time.frameCount;
                 foreach (var kv in _cropNextFrame.ToList()) { if (_cropDeferredFrame.TryGetValue(kv.Key, out var f) && f >= frame) continue; _cropDeferredFrame.Remove(kv.Key); _cropNextFrame.Remove(kv.Key); int c = Gardens.CropOf(kv.Key); ApplyCrop(kv.Key, c); if (c > 0 && ActorTypes.TryGetType(c, out var crop)) GardenJoinCheck.ExpectCrop(kv.Key, crop); }
             }
+            PumpPending(now);
             if (now >= _nextLease) { _nextLease = now + LeaseEvery; PumpLeases(now); }
-            if (now >= _nextPlotCheck) { _nextPlotCheck = now + PlotCheckEvery; PlotTypes.RetryPending(); Upgrades.RetryPending(); if (Mod.IsGuest) ConvergePlots(); }
+            if (now >= _nextPlotCheck) { _nextPlotCheck = now + PlotCheckEvery; PlotTypes.RetryPending(); Upgrades.RetryPending(); if (Mod.IsGuest) ConvergePlots(); ConvergeCrops(); }
             if (now >= _nextTimer) { _nextTimer = now + TimerEvery; PumpTimers(); }
+        }
+        /// <summary>A crop that arrived while the plot was inactive is planted once the plot has been active for a moment.</summary>
+        void PumpPending(double now)
+        {
+            if (_pending.Count == 0) return;
+            foreach (var id in _pending.TakeDue(now, id => PlotObject(id) != null))
+            {
+                int want = Gardens.CropOf(id); GardenLog("garden-applied-on-load", id, $"plot loaded: applying crop {CropName(want)}");
+                ApplyCrop(id, want); if (want > 0 && ActorTypes.TryGetType(want, out var crop)) GardenJoinCheck.ExpectCrop(id, crop);
+            }
+        }
+        readonly Dictionary<string, int> _cropConverge = new Dictionary<string, int>(StringComparer.Ordinal);
+        /// <summary>Every seat: an active garden must show the crop the revision stream says (the host's model is the truth); a few retries.</summary>
+        void ConvergeCrops()
+        {
+            if (!Mod.IsNetworkActive) return;
+            foreach (var id in Gardens.Crops.Keys.ToList())
+            {
+                if (_pending.Has(id) || _cropNextFrame.ContainsKey(id)) continue;
+                var plot = PlotObject(id); if (plot == null || plot.TypeId != LandPlot.Id.GARDEN) { _cropConverge.Remove(id); continue; }
+                int want = Gardens.CropOf(id); IdentifiableType cur = null; try { cur = plot.GetAttachedCropId(); } catch { }
+                var step = GardenPending.Decide(want, true, cur != null ? ActorTypes.IdOf(cur) : 0, plot.HasAttached());
+                if (step == GardenStep.InSync) { _cropConverge.Remove(id); continue; }
+                int n = _cropConverge.TryGetValue(id, out var t) ? t + 1 : 1; _cropConverge[id] = n;
+                if (n > MaxConvergeTries) { if (n == MaxConvergeTries + 1) Rl.Warn("garden-converge:" + id, $"garden {id} still shows {(cur != null ? cur.name : "nothing")}, wanted {CropName(want)}; giving up until the next change"); continue; }
+                GardenLog("garden-mismatch", id, $"shows {(cur != null ? cur.name : "nothing")}, stream has {CropName(want)}: re-applying ({n}/{MaxConvergeTries})");
+                ApplyCrop(id, want);
+            }
         }
         const double PlotCheckEvery = 5; const int MaxConvergeTries = 3; double _nextPlotCheck;
         readonly Dictionary<string, int> _convergeTries = new Dictionary<string, int>();

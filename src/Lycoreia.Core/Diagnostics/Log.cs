@@ -24,10 +24,22 @@ namespace Lycoreia
             lock (Gate)
             {
                 _main?.Dispose(); _sensitive?.Dispose();
+                _main = _sensitive = null;
                 Directory.CreateDirectory(folder);
-                _main = new LogFile(Path.Combine(folder, "latest.log"), maxBytes, backups);
-                _sensitive = new LogFile(Path.Combine(folder, "sensitive.log"), maxBytes, backups);
+                var main = new LogFile(Path.Combine(folder, "latest.log"), maxBytes, backups);
+                // The file sink used to swallow every failure silently (no latest.log and no hint why); now the caller learns of it and can fall back.
+                if (main.Failure != null) { var f = main.Failure; main.Dispose(); throw new IOException(f.GetType().Name + ": " + f.Message, f); }
+                _main = main;
+                _sensitive = new LogFile(Path.Combine(folder, "sensitive.log"), maxBytes, backups);   // best effort; the public log is what reports need
             }
+        }
+
+        /// <summary>Opens the first usable folder of the candidates, saying what failed and what is used. Null when none works.</summary>
+        public static string OpenFirst(IEnumerable<string> candidates)
+        {
+            var r = LogFolders.Choose(candidates, f => { try { Open(f); return null; } catch (Exception e) { Close(); return e; } });
+            foreach (var l in r.Lines) { if (l.Warn) Warn(l.Text); else Info(l.Text); }
+            return r.Folder;
         }
         public static void Close() { lock (Gate) { _main?.Dispose(); _sensitive?.Dispose(); _main = _sensitive = null; } }
 
@@ -70,7 +82,8 @@ namespace Lycoreia
 
         sealed class LogFile : IDisposable
         {
-            readonly string _path; readonly long _max; readonly int _backups; StreamWriter _w; long _size;
+            readonly string _path; readonly long _max; readonly int _backups; StreamWriter _w; long _size; bool _reported;
+            public Exception Failure;
             public LogFile(string path, long max, int backups)
             {
                 _path = path; _max = max; _backups = backups;
@@ -94,14 +107,16 @@ namespace Lycoreia
                     _w = new StreamWriter(new FileStream(_path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false)) { AutoFlush = true };
                     _size = 0;
                 }
-                catch { _w = null; }
+                catch (Exception e) { _w = null; Failure = e; Report("could not open " + _path + " (" + e.GetType().Name + ": " + e.Message + ")"); }
             }
             public void WriteLine(string s)
             {
                 if (_w == null) return;
-                try { _w.WriteLine(s); _size += s.Length + 1; if (_size >= _max) Rotate(); } catch { }
+                try { _w.WriteLine(s); _size += s.Length + 1; if (_size >= _max) Rotate(); }
+                catch (Exception e) { Failure = e; Report("write to " + _path + " failed (" + e.GetType().Name + ": " + e.Message + "); this log stops here"); _w = null; }
             }
             public void Dispose() { try { _w?.Dispose(); } catch { } _w = null; }
+            void Report(string m) { if (_reported) return; _reported = true; try { Console?.Invoke(LogLevel.Warning, "log file: " + m); } catch { } }
         }
     }
 

@@ -129,6 +129,12 @@ internal sealed class UiHover : MonoBehaviour
 /// <summary>Wires hover/press visuals and native sounds onto a widget. Never throws.</summary>
 internal static class UiFx
 {
+    /// <summary>Plays a native UI cue (2D). Safe anywhere on the main thread; silent when no native cue matches.</summary>
+    internal static void Play(UiCue cue) => UiSounds.Play(cue, null);
+
+    /// <summary>Plays a native UI cue at a world position (SECTR_AudioSystem.Play takes a position; verified by members).</summary>
+    internal static void PlayAt(UiCue cue, Vector3 position) => UiSounds.Play(cue, position);
+
     internal static void Attach(GameObject go, bool scale, bool clickOnPointerDown, float hoverScale = 1.04f)
     {
         try
@@ -176,16 +182,30 @@ internal static class UiFx
     }
 }
 
-/// <summary>Plays the game's own UI cues (found by name in its UIAudioTable assets); silent if none are found.</summary>
+/// <summary>Semantic UI sound cues, each mapped to the best-matching native cue of the game's UIAudioTable assets.</summary>
+internal enum UiCue : byte { Hover, Click, Open, Close, Select, Confirm, Cancel, Notify, Success, Fail, Whoosh }
+
+/// <summary>
+/// Plays the game's own UI cues (found by name score in its UIAudioTable assets, played through SECTR_AudioSystem.Play);
+/// silent if none is found. Names are matched by keyword because the cue names are not known at compile time: the first use logs
+/// "ui cues: Open=&lt;name&gt;, ..." (and the full name list once) so the mapping can be tuned. Main thread only. Never throws.
+/// </summary>
 internal static class UiSounds
 {
+    /// <summary>Old two-cue enum, kept for existing call sites.</summary>
     internal enum Cue : byte { Hover, Click }
 
-    private static SECTR_AudioCue? hoverCue, clickCue;
-    private static bool resolved, failed;
-    private static float lastPlay = -1f;
+    private static readonly string[][] Words = UiCueScoring.Words;
 
-    internal static void Play(Cue kind)
+    private static readonly SECTR_AudioCue?[] cues = new SECTR_AudioCue?[Words.Length];
+    private static readonly int[] scores = new int[Words.Length];
+    private static bool resolved, failed;
+    private static float lastPlay = -1f, lastHover = -1f, retryAt;
+
+    internal static void Play(Cue kind) => Play(kind == Cue.Hover ? UiCue.Hover : UiCue.Click, null);
+
+    /// <summary>Plays a cue (2D at the origin, or at a world position). Hover is rate-limited to 12 per second.</summary>
+    internal static void Play(UiCue kind, Vector3? at)
     {
         if (failed)
             return;
@@ -194,12 +214,16 @@ internal static class UiSounds
             var now = UnityEngine.Time.unscaledTime;
             if (now - lastPlay < 0.04f)
                 return;
+            if (kind == UiCue.Hover && now - lastHover < 0.08f)
+                return;
             Resolve();
-            var cue = kind == Cue.Hover ? hoverCue : clickCue;
+            var cue = cues[(int)kind];
             if (!cue)
                 return;
             lastPlay = now;
-            SECTR_AudioSystem.Play(cue, Vector3.zero, false);
+            if (kind == UiCue.Hover)
+                lastHover = now;
+            SECTR_AudioSystem.Play(cue, at ?? Vector3.zero, false);
         }
         catch (Exception ex)
         {
@@ -210,33 +234,35 @@ internal static class UiSounds
 
     private static void Resolve()
     {
-        if (resolved && (hoverCue || clickCue))
+        if (resolved && HasAny())
             return;
         if (resolved && UnityEngine.Time.unscaledTime < retryAt)
             return;
         resolved = true;
         retryAt = UnityEngine.Time.unscaledTime + 5f;
-        SECTR_AudioCue? hover = null, click = null;
-        int hoverScore = -1, clickScore = -1;
+        for (var i = 0; i < cues.Length; i++) { cues[i] = null; scores[i] = -1; }
+        var names = new System.Collections.Generic.List<string>();
         try
         {
             foreach (var table in Resources.FindObjectsOfTypeAll<UIAudioTable>())
             {
                 if (!table)
                     continue;
-                var cues = table.AudioCues;
-                if (cues == null)
+                var map = table.AudioCues;
+                if (map == null)
                     continue;
-                foreach (var pair in cues)
+                foreach (var pair in map)
                 {
                     var name = (pair.Key ?? string.Empty).ToLowerInvariant();
                     var cue = pair.Value;
                     if (!cue)
                         continue;
-                    var h = Score(name, "hover", "highlight", "mouseover", "rollover");
-                    if (h > hoverScore) { hoverScore = h; hover = cue; }
-                    var c = Score(name, "submit", "click", "press", "confirm", "select");
-                    if (c > clickScore) { clickScore = c; click = cue; }
+                    names.Add(pair.Key ?? "?");
+                    for (var i = 0; i < Words.Length; i++)
+                    {
+                        var s = Score(name, Words[i]);
+                        if (s > scores[i]) { scores[i] = s; cues[i] = cue; }
+                    }
                 }
             }
         }
@@ -245,28 +271,21 @@ internal static class UiSounds
             OwnedLog.LogWarning($"Native UI cue lookup failed: {ex.Message}");
         }
 
-        hoverCue = hover;
-        clickCue = click;
-        OwnedLog.LogMessage($"UI sounds: hover={(hover ? hover!.name : "none")} click={(click ? click!.name : "none")}");
+        var parts = new System.Collections.Generic.List<string>();
+        for (var i = 0; i < cues.Length; i++)
+            parts.Add($"{(UiCue)i}={(cues[i] ? cues[i]!.name : "none")}");
+        OwnedLog.LogMessage("ui cues: " + string.Join(", ", parts));
+        if (names.Count > 0)
+            OwnedLog.LogMessage($"ui cue names ({names.Count}): " + string.Join(", ", names));
     }
 
-    private static float retryAt;
-
-    /// <summary>Higher is a better match; -1 for none. Prefers names that also mention button/menu.</summary>
-    private static int Score(string name, params string[] words)
+    private static bool HasAny()
     {
-        var best = -1;
-        for (var i = 0; i < words.Length; i++)
-        {
-            if (!name.Contains(words[i]))
-                continue;
-            var score = 100 - i * 10;
-            if (name.Contains("button")) score += 5;
-            if (name.Contains("menu")) score += 3;
-            if (name.Contains("pause") || name.Contains("tip") || name.Contains("lab") || name.Contains("gadget")) score -= 4;
-            best = Mathf.Max(best, score);
-        }
-
-        return best;
+        foreach (var c in cues)
+            if (c)
+                return true;
+        return false;
     }
+
+    private static int Score(string name, string[] words) => UiCueScoring.Score(name, words);
 }

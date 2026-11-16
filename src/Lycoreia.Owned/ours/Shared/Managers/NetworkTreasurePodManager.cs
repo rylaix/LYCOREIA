@@ -718,20 +718,32 @@ internal static partial class NetworkTreasurePodManager
         }
     }
 
+    // rc3 perf: the join snapshot (InitialTreasurePods, ~1 s on the tester) looked up hundreds of pods in one frame, each with a full
+    // Resources.FindObjectsOfTypeAll scan. The id -> loaded pod table is now built once per frame; the same filters apply.
+    private static readonly Dictionary<int, Il2Cpp.TreasurePod> LoadedPodsThisFrame = new();
+    private static int loadedPodsFrame = -1;
+
     private static bool TryGetLoadedPod(int id, out Il2Cpp.TreasurePod? result)
     {
         result = null;
-        foreach (var pod in Resources.FindObjectsOfTypeAll<Il2Cpp.TreasurePod>())
+        var frame = UnityEngine.Time.frameCount;
+        if (frame != loadedPodsFrame)
         {
-            if (!pod || !TryGetPodId(pod, out var podId) || podId != id ||
-                !pod.gameObject || !pod.gameObject.scene.IsValid() || !pod.gameObject.activeInHierarchy)
-                continue;
-
-            result = pod;
-            return true;
+            loadedPodsFrame = frame;
+            LoadedPodsThisFrame.Clear();
+            foreach (var pod in Resources.FindObjectsOfTypeAll<Il2Cpp.TreasurePod>())
+            {
+                if (!pod || !TryGetPodId(pod, out var podId) ||
+                    !pod.gameObject || !pod.gameObject.scene.IsValid() || !pod.gameObject.activeInHierarchy)
+                    continue;
+                LoadedPodsThisFrame.TryAdd(podId, pod);
+            }
         }
 
-        return false;
+        if (!LoadedPodsThisFrame.TryGetValue(id, out var hit) || !hit || !hit.gameObject || !hit.gameObject.activeInHierarchy)
+            return false;
+        result = hit;
+        return true;
     }
 
     private static TreasurePodPacket CreateOpenPacket(int id)

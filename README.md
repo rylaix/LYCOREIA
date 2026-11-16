@@ -14,9 +14,9 @@ Made by **[Rylaix](https://github.com/rylaix)** (core developer) and **[Kum1te](
 
 ---
 
-## Testing now: 2.1.0-rc1
+## Testing now: 2.1.0-rc4
 
-A release candidate of 2.1.0 (co-op board, co-op wheel, boost jump and many sync fixes) is out as a diagnostic build. Grab `Lycoreia-2.1.0-rc1.zip` from the Releases page, play with a friend (both need rc1), and send `UserData/Lycoreia/latest.log` and `diagnostics.jsonl` from both players on Discord. See the [changelog](CHANGELOG.md).
+A release candidate of 2.1.0 (co-op board, co-op wheel, boost jump and many sync fixes) is out as a diagnostic build. Grab `Lycoreia-2.1.0-rc4.zip` from the Releases page, play with a friend (both need rc4), and send `UserData/Lycoreia/latest.log` and `diagnostics.jsonl` from both players on Discord. See the [changelog](CHANGELOG.md).
 
 ---
 

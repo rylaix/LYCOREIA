@@ -12,6 +12,8 @@ namespace Lycoreia.Game
     {
         public string Name => "update-check";
         static volatile UpdateStatus _result; static bool _started, _published, _toldInWorld;
+        /// <summary>Set by the UI layer: shows the in-game update notice as a toast (title, detail). Without it the notice falls back to one chat line.</summary>
+        public static Action<string, string> InGameToast;
 
         /// <summary>Starts the background check once (setting "Check For Updates").</summary>
         public static void Start()
@@ -63,7 +65,13 @@ namespace Lycoreia.Game
             if (!_toldInWorld && GameState.Ready && !GameState.Loading && (r.Kind == UpdateKind.UpdateAvailable || r.Kind == UpdateKind.AheadOfPublic))
             {
                 _toldInWorld = true;
-                try { Mod.Session?.RaiseNotice(r.Message); } catch { }
+                try   // one path only (toast, or the chat line when no UI is up), so the notice is never doubled
+                {
+                    var toast = InGameToast;
+                    if (toast != null) { Text.MenuText.UpdateToast(r, out var title, out var body); toast(title, body); }
+                    else Mod.Session?.RaiseNotice(Text.MenuText.UpdateMessage(r));
+                }
+                catch { }
             }
         }
     }
