@@ -12,16 +12,63 @@ internal sealed partial class LycoreiaMenu
 {
     private enum CoopTab : byte { Jobs, Notes, Expeditions, Recap }
     private CoopTab coopTab = CoopTab.Jobs;
-    private int whatsNewSection;
+    private int whatsNewSection, whatsNewPage;
+    private const int WhatsNewPerPage = 4;
 
     [HideFromIl2Cpp]
-    private string CoopSignature() => $"{CoopRuntime.Revision}|{coopTab}|{whatsNewSection}|{CoopRuntime.LastRecap.Count}|{ExpeditionClock()}|{CoopText.RenderLang()}|{RecentTick()}";
+    private string CoopSignature() => $"{BoardKey()}|{coopTab}|{whatsNewSection}|{whatsNewPage}|{CoopRuntime.LastRecap.Count}|{CoopText.RenderLang()}";
 
-    /// <summary>The menu redraws once a second while an expedition runs (its clock).</summary>
-    private static long ExpeditionClock()
+    /// <summary>
+    /// What the visible board page shows, without the parts that tick ("menu blinks"): the menu used to key on CoopRuntime.Revision
+    /// (bumped by every 2 s stat report and every expedition progress step) and on the expedition clock, so it was destroyed and rebuilt
+    /// every second or two. Pages without board content ignore the board; the expedition clock, progress and team counts update in place.
+    /// </summary>
+    [HideFromIl2Cpp]
+    private string BoardKey()
     {
-        var run = CoopRuntime.Board.Expedition;
-        return run != null && run.Outcome == ExpeditionOutcome.Running ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : 0;
+        if (page != Page.Coop) return string.Empty;
+        var b = CoopRuntime.Board;
+        switch (coopTab)
+        {
+            case CoopTab.Jobs:
+                return string.Join(";", b.Jobs.Select(j => $"{j.Id},{j.Done},{j.ClaimedBy},{j.CreatedBy},{j.HasPosition},{j.Text}")) + "|" + RecentTick();
+            case CoopTab.Notes:
+                return string.Join(";", b.Notes.Select(n => $"{n.Id},{n.UpdatedUtc},{n.Scene},{n.Author},{n.Text}")) + "|" + Lycoreia.Game.Avatars.RemoteAvatars.LocalSceneGroup();
+            case CoopTab.Expeditions:
+                var r = b.Expedition;
+                return (r == null ? "-" : $"{r.DefId},{r.StartedUtc},{r.Outcome},{r.Target},{r.Reward},{string.Join(",", r.ByPlayer.Keys.OrderBy(k => k))}" +
+                        (r.Outcome == ExpeditionOutcome.Running ? string.Empty : $",{r.Progress}")) +
+                       $"|{b.History.Count}|{Lycoreia.Mod.Session?.Players.Count}";
+            default:
+                return string.Join(";", b.Recap.Select(p => p.Key + ":" + string.Join(",", p.Value.Select(s => $"{s.Key}={s.Value}"))));
+        }
+    }
+
+    private UiText? expProgressLine, expTeamLine;
+
+    /// <summary>Expedition clock, progress and per-player counts written into the already rendered rows (no rebuild, no blink).</summary>
+    [HideFromIl2Cpp]
+    private void UpdateLiveLines()
+    {
+        try
+        {
+            if (page != Page.Coop || coopTab != CoopTab.Expeditions) return;
+            var run = CoopRuntime.Board.Expedition;
+            if (run == null || run.Outcome != ExpeditionOutcome.Running) return;
+            long left = Math.Max(0, run.EndsUtc - DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            SetLive(expProgressLine, MenuText.ExpProgress(run.Progress, run.Target, left, run.Reward));
+            if (run.ByPlayer.Count > 0)
+                SetLive(expTeamLine, MenuText.Team(string.Join(", ", run.ByPlayer.OrderByDescending(p => p.Value).Select(p => $"{CoopRuntime.NameOf(p.Key)} {p.Value}"))));
+        }
+        catch (Exception ex) { OwnedLog.LogWarning("menu live lines: " + ex.Message); }
+    }
+
+    [HideFromIl2Cpp]
+    private static void SetLive(UiText? line, string text)
+    {
+        if (line?.Rendered == null || !line.Rendered) return;
+        var tmp = line.Rendered.GetComponent<TextMeshProUGUI>();
+        if (tmp && tmp.text != text) tmp.text = text;
     }
 
     /// <summary>"Recently done" shows how long ago: refresh the text once a minute while the board is open.</summary>
@@ -35,7 +82,7 @@ internal sealed partial class LycoreiaMenu
             OpenMenu();
             var menu = _instance;
             if (menu == null || !_isOpen) return;
-            menu.page = Page.WhatsNew; menu.whatsNewSection = 0; menu.Rebuild();
+            menu.page = Page.WhatsNew; menu.whatsNewSection = 0; menu.whatsNewPage = 0; menu.Rebuild();
         }
         catch (Exception ex) { OwnedLog.LogWarning($"Could not open the what's new page: {ex.Message}"); }
     }
@@ -54,15 +101,19 @@ internal sealed partial class LycoreiaMenu
     {
         var sections = WhatsNew.For(CoopText.RenderLang());
         rows.Add(Heading(MenuText.WhatsNewHeading(BuildInfo.Version)));
-        var tabs = sections.Select((s, i) => (s.Title, i == whatsNewSection, (Action)(() => { whatsNewSection = i; Rebuild(); }))).ToArray();
+        var tabs = sections.Select((s, i) => (s.Tab ?? s.Title, i == whatsNewSection, (Action)(() => { whatsNewSection = i; whatsNewPage = 0; Rebuild(); }))).ToArray();
         rows.Add(Tabs(tabs));
         var section = sections[Math.Clamp(whatsNewSection, 0, sections.Count - 1)];
-        foreach (var (text, tryIt) in section.Items)
-        {
-            rows.Add(Line("• " + text, UiColor.TextCategory));                                   // the change itself stands out by colour, not by faux bold
-            if (!string.IsNullOrEmpty(tryIt)) rows.Add(Line("<alpha=#BB>" + MenuText.TryIt(tryIt), UiColor.TextGeneral, TryItSize, TryItInset));   // how to try it: smaller, same inset on every row
-        }
-        rows.Add(Line(MenuText.FoundProblem, UiColor.TextWarning));
+        // rc6: cards in a 2-column grid, 4 per page (the menu does not scroll: a long list used to shrink the whole panel)
+        int pages = Math.Max(1, (section.Items.Count + WhatsNewPerPage - 1) / WhatsNewPerPage);
+        whatsNewPage = Math.Clamp(whatsNewPage, 0, pages - 1);
+        rows.Add(WhatsNewCards.Grid(section.Items.Skip(whatsNewPage * WhatsNewPerPage).Take(WhatsNewPerPage).ToList(), RowWidth, showTry: true));
+        if (pages > 1)
+            rows.Add(Tabs(
+                (MenuText.PrevPage, false, () => { if (whatsNewPage > 0) { whatsNewPage--; Rebuild(); } }),
+                (MenuText.PageOf(whatsNewPage + 1, pages), true, () => { }),
+                (MenuText.NextPage, false, () => { if (whatsNewPage < pages - 1) { whatsNewPage++; Rebuild(); } })));
+        rows.Add(Line(MenuText.FoundProblem, UiColor.TextWarning, TryItSize));
         rows.Add(Button(MenuText.Back, () => Navigate(Page.Home), alternative: true));
     }
 
@@ -191,8 +242,8 @@ internal sealed partial class LycoreiaMenu
         {
             long left = Math.Max(0, run.EndsUtc - DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             rows.Add(Line(MenuText.ExpRunning(MenuText.ExpName(def), MenuText.ExpGoal(def))));
-            rows.Add(Line(MenuText.ExpProgress(run.Progress, run.Target, left, run.Reward)));
-            if (run.ByPlayer.Count > 0) rows.Add(Line(MenuText.Team(string.Join(", ", run.ByPlayer.OrderByDescending(p => p.Value).Select(p => $"{CoopRuntime.NameOf(p.Key)} {p.Value}"))), UiColor.TextCategory));
+            rows.Add(expProgressLine = Line(MenuText.ExpProgress(run.Progress, run.Target, left, run.Reward)));
+            if (run.ByPlayer.Count > 0) rows.Add(expTeamLine = Line(MenuText.Team(string.Join(", ", run.ByPlayer.OrderByDescending(p => p.Value).Select(p => $"{CoopRuntime.NameOf(p.Key)} {p.Value}"))), UiColor.TextCategory));
             rows.Add(Button(MenuText.CallOff, () => CoopRuntime.Do(new CoopOp { Kind = CoopOpKind.ExpeditionAbandon }), alternative: true));
             return;
         }

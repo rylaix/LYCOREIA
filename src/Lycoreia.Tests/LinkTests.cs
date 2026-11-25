@@ -153,7 +153,7 @@ namespace Lycoreia.Tests
                 var r2 = new LinkRig(); r2.Cut = true; r2.A.Send(5, 0, Delivery.Reliable, Blob(40 * 1200));
                 r2.Step(40_000); T.Eq(1, r2.A.PendingReliable, "large still alive at 40s"); r2.Step(6_000); T.Eq(0, r2.A.PendingReliable);
             });
-            T.Test("link/a 20s blackout loses nothing and resends back off (issue 2026-11-09)", () =>
+            T.Test("link/a 20s blackout loses nothing and resends back off", () =>
             {
                 var r = new LinkRig(); r.Cut = true; r.A.Send(5, 0, Delivery.ReliableOrdered, new byte[] { 1 }); r.A.Send(5, 0, Delivery.ReliableOrdered, new byte[] { 2 });
                 long sent = r.A.DatagramsSent; r.Step(20_000);

@@ -88,7 +88,7 @@ internal sealed class ToastHost : MonoBehaviour
         var rt = UiNode.AddChild(Rect, "Toast");
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(1f, 1f);
         rt.sizeDelta = new Vector2(Width, Height);
-        UiNode.AddImage(rt, UiTheme.PanelColor, 14, false);
+        UiPlates.Apply(UiNode.AddImage(rt, Color.white, 0, false), PlateKind.Card);
         var bar = UiNode.AddChild(rt, "Accent");
         bar.anchorMin = new Vector2(0f, 0f); bar.anchorMax = new Vector2(0f, 1f); bar.pivot = new Vector2(0f, 0.5f);
         bar.sizeDelta = new Vector2(6f, -16f); bar.anchoredPosition = new Vector2(8f, 0f);
@@ -117,7 +117,7 @@ internal sealed class ToastHost : MonoBehaviour
     {
         var rt = UiNode.AddChild(parent, name);
         rt.anchorMin = new Vector2(0f, yMin); rt.anchorMax = new Vector2(1f, yMax);
-        rt.offsetMin = new Vector2(left, 6f); rt.offsetMax = new Vector2(-16f, -6f);
+        rt.offsetMin = new Vector2(left, 6f); rt.offsetMax = new Vector2(-UiPlates.PadCard.x, -6f);
         var t = rt.gameObject.AddComponent<TextMeshProUGUI>();
         var font = UiFonts.Default; if (font) t.font = font;
         t.text = text; t.fontSize = size; t.fontStyle = style; t.color = color; t.raycastTarget = false;

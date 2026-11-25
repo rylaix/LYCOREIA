@@ -44,6 +44,17 @@ namespace Lycoreia.Tests
     {
         public static void Register()
         {
+            T.Test("session/an unanswered first address falls back to the next one", () =>
+            {
+                var w = new World(); w.StartHost(); var g = w.AddGuest(); g.DevMode = true; int port = 6100; g.Open = _ => w.Net.Open(port++);
+                var r = g.Connect(new[] { new IPEndPoint(IPAddress.Loopback, 1777), new IPEndPoint(IPAddress.Loopback, 1919) });   // nothing listens on 1777
+                T.True(r == null, r);
+                T.True(w.Net.RunUntil(() => g.Joined, 20000), "joined through the second address");
+                T.True(g.Connected && w.Host.Node.GuestCount == 1);
+                var g2 = w.AddGuest("G2"); g2.DevMode = true; g2.Open = _ => w.Net.Open(port++); string err = null; g2.ErrorShown += e => err = e;
+                T.True(g2.Connect(new[] { new IPEndPoint(IPAddress.Loopback, 1777), new IPEndPoint(IPAddress.Loopback, 1778) }) == null);
+                T.True(w.Net.RunUntil(() => err != null, 30000), "fails after the last address"); T.True(!g2.Connecting && err.Contains("did not answer"), err);
+            });
             T.Test("session/join flow with matching mods", () =>
             {
                 var w = new World(); w.StartHost(); var g = w.AddGuest(); var events = new List<string>();

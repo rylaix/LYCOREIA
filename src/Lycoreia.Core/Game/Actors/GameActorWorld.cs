@@ -44,7 +44,7 @@ namespace Lycoreia.Game
                 if (!ActorTypes.TryGetType(e.TypeId, out var type)) return false;
                 if (!HasPrefab(type))
                 {
-                    // Issue 2026-11-09: a type without a prefab threw "The Object you want to instantiate is null" after the model was
+                    // a type without a prefab threw "The Object you want to instantiate is null" after the model was
                     // already created. That leaked a model, failed every snapshot (guest gave up after 2 resyncs with a half-built world),
                     // and made the host reject the owner's spawn and destroy the real actor at its origin. Keep a table-only entry instead:
                     // ownership, poses and destroys still apply to the entry, and no other seat ever sees a broken object.
@@ -60,6 +60,7 @@ namespace Lycoreia.Game
                 {
                     actor = model.InstantiateActorWithoutNotify(new ActorId(e.Id), type, group, V(e.Position), Q(e.Rotation));
                     if (actor == null) return false;
+                    Hooks.SlimeRadiance.ApplyToNewModel(actor, e);                                       // before Start reads it
                     if (SceneContext.Instance != null && SceneContext.Instance.GameModel != null) InstantiationHelpers.InstantiateActorFromModel(actor);   // model-only when its region is not loaded
                 }
                 finally { ActorReconciler.AllocatorAfter(alloc, e.Id); }                 // a replica's id must never move our own allocator
@@ -154,7 +155,7 @@ namespace Lycoreia.Game
                             if (ProduceRules.ScaleApplies(produce, s.Scale)) go.transform.localScale = Vector3.one * s.Scale;
                             else if (!produce)
                             {
-                                // issue4: a produce scale must never resize a plort or slime that holds this id on this seat
+                                // a produce scale must never resize a plort or slime that holds this id on this seat
                                 Rl.Warn("state-nonproduce:" + s.ActorId, $"produce state for actor {s.ActorId} ignored: the local object {go.name} is not produce (scale {s.Scale:0.00})");
                                 Mod.Diagnostics?.Record("actors", "produce-state-nonproduce", $"id={s.ActorId}; object={go.name}; scale={s.Scale:0.00}");
                                 break;

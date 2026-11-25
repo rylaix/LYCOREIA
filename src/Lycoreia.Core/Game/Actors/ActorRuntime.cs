@@ -197,7 +197,7 @@ namespace Lycoreia.Game
                     if (e.Owner == Mod.LocalId && rc._model != null)
                     {
                         bool changed = onTree != e.Attached || (int)rc._model.state != e.SentStage;
-                        // issue5 (fruit left floating on the other seat): a harvester's first state after its capture grant can reach the previous owner
+                        // (fruit left floating on the other seat): a harvester's first state after its capture grant can reach the previous owner
                         // before that owner applied the grant and is dropped there ("not from the owner"); the sender had already recorded it as sent,
                         // so the old owner kept the fruit on its plant joint for up to 15 s. Re-send once a second for a few seconds after becoming owner.
                         bool retry = !changed && _ownedAt.TryGetValue(e.Id, out var since) && now - since < ProduceResendSeconds && now - (_produceResent.TryGetValue(e.Id, out var last) ? last : 0) >= 1.0;
@@ -230,7 +230,7 @@ namespace Lycoreia.Game
                 catch { }
             }
         }
-        // ------------------------------------------------------------------ plort scale (issue4)
+        // ------------------------------------------------------------------ plort scale
         static readonly Dictionary<int, float> _plortScale = new Dictionary<int, float>();
         /// <summary>The prefab scale of a plort type (cached per type id); null for every other type.</summary>
         static float? PlortPrefabScale(int typeId)

@@ -32,10 +32,10 @@ internal static class ChatHud
     private const float MessageFadeSeconds = 1.5f;
     private const float RowAppearSeconds = 0.28f;
 
-    private static readonly Color PanelColor = new(0.07f, 0.08f, 0.11f, 0.86f);
+    private static readonly Color PanelColor = new(0.050f, 0.045f, 0.100f, 0.86f);
     private static readonly Color InputColor = new(0.14f, 0.16f, 0.22f, 1f);
     private static readonly Color AccentColor = new(0.14f, 0.71f, 0.80f, 1f);
-    private static readonly Color RowColor = new(0.05f, 0.06f, 0.08f, 0.55f);
+    private static readonly Color RowColor = new(0.055f, 0.050f, 0.110f, 0.70f);
 
     private sealed class Row
     {
@@ -51,14 +51,13 @@ internal static class ChatHud
     private static GameObject? root;
     private static CanvasGroup? rootGroup;
     private static RectTransform? panel;
-    private static Image? panelImage;
+    private static Image? panelImage, panelShadow, panelEdge;
     private static RectTransform? logArea;
     private static RectTransform? inputRect;
     private static Image? inputImage;
     private static CanvasGroup? inputGroup;
     private static TMP_InputField? input;
     private static TextMeshProUGUI? counter;
-    private static Sprite? roundedSprite;
     private static TMP_FontAsset? font;
 
     private static readonly List<Row> rows = new();
@@ -106,6 +105,7 @@ internal static class ChatHud
             if (!root && !Build())
                 return;
             root!.SetActive(true);
+            UiFonts.EnsureCyrillic();   // Russian typed with the game in English drew nothing (no Cyrillic fallback was ever added)
 
             SyncRows(ui);
             HandleKeys(ui);
@@ -304,15 +304,14 @@ internal static class ChatHud
         group.interactable = false;
 
         var background = go.AddComponent<Image>();
-        background.sprite = roundedSprite;
-        background.type = Image.Type.Sliced;
-        background.color = RowColor;
+        UiPlates.Apply(background, PlateKind.Label, RowColor, true, false);   // no shadow: the log area clips to its rect
         background.raycastTarget = false;
 
         var textGo = new GameObject("Text");
         var textRect = textGo.AddComponent<RectTransform>();
         textRect.SetParent(rect, false);
-        Stretch(textRect, 10f, 4f);
+        var pad = UiPlates.PaddingOf(PlateKind.Label);
+        Stretch(textRect, pad.x, pad.y);
         var text = textGo.AddComponent<TextMeshProUGUI>();
         ApplyFont(text);
         text.fontSize = FontSize;
@@ -322,10 +321,10 @@ internal static class ChatHud
         text.raycastTarget = false;
         text.text = Format(message);
 
-        var maxTextWidth = Width - Padding * 2f - 20f;
+        var maxTextWidth = Width - Padding * 2f - pad.x * 2f;
         var size = text.GetPreferredValues(text.text, maxTextWidth, 0f);
-        var height = Mathf.Ceil(size.y) + 8f;
-        rect.sizeDelta = new Vector2(Mathf.Min(Mathf.Ceil(size.x) + 22f, Width - Padding * 2f), height);
+        var height = Mathf.Ceil(size.y) + pad.y * 2f;
+        rect.sizeDelta = new Vector2(Mathf.Min(Mathf.Ceil(size.x) + pad.x * 2f, Width - Padding * 2f), height);
 
         rows.Add(new Row
         {
@@ -387,6 +386,8 @@ internal static class ChatHud
 
         // Panel: fades in, grows from slightly smaller and slides in from the left.
         panelImage!.color = new Color(PanelColor.r, PanelColor.g, PanelColor.b, PanelColor.a * fade);
+        panelShadow!.color = new Color(UiPlates.ShadowColour.r, UiPlates.ShadowColour.g, UiPlates.ShadowColour.b, UiPlates.ShadowColour.a * fade);
+        panelEdge!.color = new Color(UiPlates.Edge.r, UiPlates.Edge.g, UiPlates.Edge.b, UiPlates.Edge.a * fade);
         panel!.localScale = new Vector3(Mathf.LerpUnclamped(0.94f, 1f, eased), Mathf.LerpUnclamped(0.9f, 1f, eased), 1f);
         panel.anchoredPosition = new Vector2(LeftMargin - 24f * (1f - fade), BottomMargin);
 
@@ -448,7 +449,6 @@ internal static class ChatHud
     {
         try
         {
-            roundedSprite = UiSprites.Rounded(18);
             font = UiFonts.Default;
 
             root = new GameObject("LycoreiaChat");
@@ -472,9 +472,9 @@ internal static class ChatHud
             panel.pivot = new Vector2(0f, 0f);
             panel.sizeDelta = new Vector2(Width, LogHeight + InputHeight + Padding * 3f);
             panelImage = panelGo.AddComponent<Image>();
-            panelImage.sprite = roundedSprite;
-            panelImage.type = Image.Type.Sliced;
             panelImage.raycastTarget = false;
+            UiPlates.Apply(panelImage, PlateKind.Card, PanelColor, true, true, LogHeight + InputHeight + Padding * 3f);
+            panelShadow = panel.Find("PlateShadow").GetComponent<Image>(); panelEdge = panel.Find("PlateEdge").GetComponent<Image>();
 
             var logGo = new GameObject("Log");
             logArea = logGo.AddComponent<RectTransform>();
@@ -513,9 +513,7 @@ internal static class ChatHud
         inputRect.sizeDelta = new Vector2(Width - Padding * 2f, InputHeight);
         inputGroup = go.AddComponent<CanvasGroup>();
         inputImage = go.AddComponent<Image>();
-        inputImage.sprite = roundedSprite;
-        inputImage.type = Image.Type.Sliced;
-        inputImage.color = InputColor;
+        UiPlates.Apply(inputImage, PlateKind.Card, InputColor, true, false, InputHeight);
 
         var areaGo = new GameObject("Text Area");
         var area = areaGo.AddComponent<RectTransform>();

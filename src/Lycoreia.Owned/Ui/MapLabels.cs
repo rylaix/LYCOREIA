@@ -134,7 +134,7 @@ internal sealed class MapLabels : MonoBehaviour
         string s = MapText.Label(job.Text, job.CreatedBy.Length > 0 ? CoopRuntime.NameOf(job.CreatedBy) : "", who, job.ClaimedBy.Length > 0 && job.ClaimedBy == me);
         if (logged.Add(jobId)) try { OwnedLog.LogMessage($"map labels: hover on job {jobId}"); } catch { }
         if (text.text != s) { text.text = s; text.ForceMeshUpdate(); }
-        float w = 420f, h = Mathf.Max(70f, text.preferredHeight + 20f);
+        float w = 420f, h = Mathf.Max(70f, text.GetPreferredValues(s, w - 2f * UiPlates.PadCard.x, 0f).y + 2f * UiPlates.PadCard.y);   // measured at the final width
         panel.sizeDelta = new Vector2(w, h);
         var root = Rect.rect;
         float k = root.width / Mathf.Max(1f, Screen.width);
@@ -153,9 +153,9 @@ internal sealed class MapLabels : MonoBehaviour
         if (panel) return;
         panel = UiNode.AddChild(Rect, "JobHoverLabel");
         panel.anchorMin = panel.anchorMax = Vector2.zero; panel.pivot = new Vector2(0f, 1f);
-        UiNode.AddImage(panel, UiTheme.PanelColor, 12, false);
+        var plate = panel.gameObject.AddComponent<Image>(); plate.raycastTarget = false; UiPlates.Apply(plate, PlateKind.Card, UiPlates.FillStrong);
         var t = UiNode.AddChild(panel, "Text");
-        t.anchorMin = Vector2.zero; t.anchorMax = Vector2.one; t.offsetMin = new Vector2(14f, 10f); t.offsetMax = new Vector2(-14f, -10f);
+        t.anchorMin = Vector2.zero; t.anchorMax = Vector2.one; var pad = UiPlates.PadCard; t.offsetMin = pad; t.offsetMax = -pad;
         text = t.gameObject.AddComponent<TextMeshProUGUI>();
         var font = UiFonts.Default; if (font) text.font = font;
         text.fontSize = 22f; text.color = UiTheme.GeneralText; text.raycastTarget = false; text.richText = true;

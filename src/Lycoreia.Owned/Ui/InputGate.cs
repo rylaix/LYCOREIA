@@ -51,7 +51,7 @@ internal static class InputGate
             if (paused != null && OtherEnabled(paused)) paused.Disable();
             if (!module) { module = CurrentModule(); moveWas |= Enabled(module?.move); submitWas |= Enabled(module?.submit); cancelWas |= Enabled(module?.cancel); }   // new scene: new module
             if (module) { Disable(module!.move); Disable(module.submit); Disable(module.cancel); }
-            // The gate only holds KEYS. Disabling the maps above can take the UI map's pointer actions down with it (issue7: clicks dead while a text
+            // The gate only holds KEYS. Disabling the maps above can take the UI map's pointer actions down with it (clicks dead while a text
             // field had focus, Esc still worked): point/click/scroll are switched straight back on.
             if (module) KeepPointer(module!, pointWas, clickWas, scrollWas, "gate");
         }

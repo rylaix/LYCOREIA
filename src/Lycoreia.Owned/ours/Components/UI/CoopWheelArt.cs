@@ -9,7 +9,9 @@ namespace Lycoreia.Owned.Components.UI;
 
 internal static class CoopWheelArt
 {
-    private const int RingSize = 160;
+    // "radial menu is a bit pixelated": the ring was a 160 px texture stretched to 500 reference px (650+ px at 1440p);
+    // 512 px keeps its anti-aliased edge about one screen pixel wide up to 4K. Icons 64 -> 128 for the same reason.
+    private const int RingSize = 512, IconSize = 128;
     internal const float RingInnerRatio = 0.58f;
     private static Sprite? ring;
     private static readonly System.Collections.Generic.Dictionary<string, (Sprite? sprite, bool native)> icons = new();
@@ -32,15 +34,17 @@ internal static class CoopWheelArt
         try
         {
             var n = RingSize; var half = n / 2f;
-            var tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { name = "Lycoreia.WheelRing", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            var tex = new Texture2D(n, n, TextureFormat.RGBA32, true) { name = "Lycoreia.WheelRing", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
+            var px = new Color32[n * n];
             for (var y = 0; y < n; y++)
                 for (var x = 0; x < n; x++)
                 {
                     var d = Mathf.Sqrt((x + 0.5f - half) * (x + 0.5f - half) + (y + 0.5f - half) * (y + 0.5f - half));
-                    var a = Mathf.Clamp01(half - d + 0.5f) * Mathf.Clamp01(d - half * RingInnerRatio + 0.5f);
-                    tex.SetPixel(x, y, new Color(1, 1, 1, a));
+                    var a = Mathf.Clamp01((half - 1f - d) / 1.5f + 0.5f) * Mathf.Clamp01((d - half * RingInnerRatio) / 1.5f + 0.5f);
+                    px[y * n + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
                 }
-            tex.Apply(false, false); tex.hideFlags = HideFlags.HideAndDontSave;
+            tex.SetPixels32(px);
+            tex.Apply(true, false); tex.hideFlags = HideFlags.HideAndDontSave;
             ring = Sprite.Create(tex, new Rect(0, 0, n, n), new Vector2(0.5f, 0.5f), 100f);
             ring.name = "Lycoreia.WheelRing"; ring.hideFlags = HideFlags.HideAndDontSave;
             OwnedLog.LogMessage("wheel art: generated ring sprite (radial-filled curved wedges)");
@@ -131,12 +135,14 @@ internal static class CoopWheelArt
 
     private static Sprite? Generated(string key)
     {
-        const int n = 64;
-        var tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { name = "Lycoreia.WheelIcon." + key, wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+        const int n = IconSize;
+        var tex = new Texture2D(n, n, TextureFormat.RGBA32, true) { name = "Lycoreia.WheelIcon." + key, wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear };
+        var px = new Color32[n * n];
         for (var y = 0; y < n; y++)
             for (var x = 0; x < n; x++)
-                tex.SetPixel(x, y, new Color(1, 1, 1, Glyph(key, (x + 0.5f) / n, (y + 0.5f) / n, 1.5f / n)));
-        tex.Apply(false, false); tex.hideFlags = HideFlags.HideAndDontSave;
+                px[y * n + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(Glyph(key, (x + 0.5f) / n, (y + 0.5f) / n, 2f / n) * 255f));
+        tex.SetPixels32(px);
+        tex.Apply(true, false); tex.hideFlags = HideFlags.HideAndDontSave;
         var s = Sprite.Create(tex, new Rect(0, 0, n, n), new Vector2(0.5f, 0.5f), 100f); s.name = "Lycoreia.WheelIcon." + key; s.hideFlags = HideFlags.HideAndDontSave;
         return s;
     }

@@ -18,7 +18,7 @@ internal static class ShopPurchasePatch
         if (ModFacade.Server.IsRunning)
             NetworkShopManager.QueueSnapshotAfterNextFrame("host purchase");
         else if (ModFacade.Client.IsConnected)
-            NetworkShopManager.RequestPurchase(item, count);
+            NetworkShopManager.RecordGuestPurchase(item, count);   // rc11: the purchase already ran natively on the guest
     }
 }
 

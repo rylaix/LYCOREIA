@@ -601,7 +601,7 @@ namespace Lycoreia.Actors
                 catch (Exception ex) { Log.Warn("snapshot actor failed: " + ex.Message); failed.Add(r.ActorId); }
             }
             if (failed.Count == 0) return ApplyOutcome.Success;
-            // Issue 2026-11-09: one deterministic bad record failed the whole snapshot; each retry wiped and rebuilt the world with the
+            // one deterministic bad record failed the whole snapshot; each retry wiped and rebuilt the world with the
             // same failures, then the guest aborted and played on a half-built table. A few unbuildable records are not worth that:
             // only a broad failure (game not ready, model missing) asks the host for a resync.
             bool broad = SnapshotFailureIsBroad(failed.Count, attempted);

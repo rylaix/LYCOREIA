@@ -1,8 +1,84 @@
 # Changelog
 
+## [2.1.0] - 2026-11-25
+
+The first full release since 2.0.0. It brings together everything from the 2.1.0 test builds (rc1 to rc12): co-op features you can only play together, joining through Steam, Spanish, a reworked Russian translation, and many sync fixes from your reports.
+
+Every player in a session needs 2.1.0: it does not join 2.0.x or any 2.1.0 test build.
+
+Download `Lycoreia-2.1.0.zip` and put `Mods/Lycoreia.dll` from the zip into the game's `Mods` folder on every PC. Mod authors: `Lycoreia-SDK-2.1.0.zip` holds the SDK (MIT license).
+
+Thanks to **mankwa** and **afficti0n** for reporting the chicken bursts and the corrals that did not sync, and to all our testers for their reports and logs.
+
+### New
+
+#### Playing together
+- Boost jump: players are solid now (the body is exactly the size of the player). Stand on a friend and jump to reach far higher. Everyone sees a puff of dust, hears it, and sees the friend you jumped off squash a little.
+- Co-op wheel: hold the middle mouse button (or a free gamepad button and the stick) while looking at a corral, garden, silo, plot, Gordo or any spot to pin a job or leave a note there. Aim at a job or note (or its marker) to claim, drop, finish or remove it. A short tap still pings. The wheel is round, with icons, sounds and a hover highlight.
+- Co-op board (Pause > Multiplayer > Co-op board):
+  - Jobs: pin jobs for each other, claim them, tick them off. Jobs pinned at a place show on the compass, above the spot and on the world map. A "Recently done" list shows who finished what.
+  - Expeditions: timed team goals (Plort Rush, Wild Roundup, Gordo Feast, Harvest Run, Treasure Trail, Market Day). Three are on offer at a time; a finished one comes back later with a bigger goal and reward. The goal grows with the team, and finishing pays the shared ranch.
+  - Slime notes: leave a note on a corral or a Gordo; everyone sees it floating above it.
+  - Recap: what everyone did this session. The main menu shows the last session's recap after you leave.
+  - Jobs, notes and expedition history are kept with the host's save.
+- Expedition tracker: a compact panel in the upper-left corner with a progress bar, a timer that turns red near the end, and a chime when the goal is reached. It hides with the HUD.
+- Co-op events (job posted, claimed or done, new note, expedition started, completed or failed) show as on-screen notices.
+- Pings fade in and out and play a sound.
+
+#### Connecting
+- Join through Steam: a host's world is also reachable through Steam, so friends can join even when the host's provider blocks incoming connections (shared "grey" IP, CGNAT) or the router cannot open a port. No router setup needed.
+- The Join page has a "Steam friends" tab: your Steam friends with an open world, one click to join. A notice pops up when a Steam friend opens their world.
+- Let-in codes for players without Steam: when the host cannot be reached directly, the joining player gets a short let-in code (copied automatically). The host pastes it on the hosting page under "Let a friend in".
+- Join codes hold every way to reach the host (internet address, home network address, Steam). Players on the same home network connect directly. Old codes still work.
+- Every Multiplayer page says whether Steam connect is on, and the connecting and connected pages say how you are connected (Steam, home network or internet).
+- The hosting page warns when friends over the internet probably cannot reach you (shared provider address, a second router, a VPN) or when the Windows Firewall rule could not be added. "Could not reach the host" explains the likely reasons and what to try.
+- Automatic hosting no longer gives up when the router cannot open a port: the world opens anyway and the hosting page explains what still works.
+
+#### Languages and menus
+- Spanish: every menu, notice, hint, the co-op wheel, the board and the release notes, using the game's own Spanish terms. Lycoreia follows the game's language setting.
+- Russian: the co-op features and the Lycoreia menu are translated, and the whole text was reviewed line by line. Connection errors, hosting messages and chat lines are translated too.
+- "What's new" opens once after an update and has its own button in the Lycoreia menu.
+- Update notice: Lycoreia tells you when GitHub or Nexus Mods has a newer version (test builds included), or when you run a build newer than the public one. Option "Check For Updates" in the settings.
+- One-time hints for the co-op wheel and the boost jump.
+- Text backgrounds (name tags, labels, notices, the expedition tracker, the co-op wheel, chat and the Lycoreia menu) have rounded corners, a soft shadow and a thin edge.
+
+#### For mod authors
+- Public API v1 (`Lycoreia.Api.LycoreiaApi`) and an MIT-licensed SDK, so cheat panels, spawners, map and HUD mods can work with Lycoreia co-op without touching its internals: session role, players, the "Allow cheats" rule, sharing spawned objects, and events.
+
+### Fixed
+- Shop: a joining player buys in the shop (toys and more) just like in single player. Before, purchases could fail, the item could be unlocked without being paid for, or be bought twice. Sold-out items and purchase limits are shared.
+- Grey Labyrinth: unstable objects (for example unstable meat) no longer multiply for the other player.
+- The Grey Labyrinth entrance (the door opened by the projectors) opens for everyone, not only the host.
+- The speed of a corral auto-feeder is shared, and both players can change it.
+- Radiant slimes look radiant for every player, and stay radiant after the other player vacuums them up and shoots them out.
+- Silos, corral plort collectors and auto-feeders sync; collectors no longer double plorts.
+- Gates, ranch expansions, plort statue doors, puzzle slots, prisma barriers and trigger switches opened by one player open for everyone.
+- Corrals and plot upgrades from saves made before playing together appear for the guest.
+- Ringtails no longer multiply at dawn and dusk.
+- Food eaten by a slime disappears for everyone (no endless chickens).
+- Tarrs can be killed by either player.
+- Fruit harvested by one player no longer floats in the air for the other.
+- A garden planted while the other player was far from the ranch appears when they come back.
+- Two players behind the same router can join each other with a join code. With a VPN on the host's PC, the join code no longer points at the VPN address.
+- Buttons in the Lycoreia menu could stop responding to clicks, and the Multiplayer menu blinked while an expedition was running.
+- Russian text showed only punctuation, and Russian typed in chat drew nothing with the game in English.
+- Name tags and labels are sharp and fade with distance instead of staying visible across the map. The co-op wheel is no longer pixelated.
+- The co-op wheel could stop opening after a few presses.
+- Typing in a menu text field caused stutter, and typing a note or chat message could drive the game's pause menu (and quit to the main menu).
+- Shorter freeze when joining a world with many treasure pods.
+- Lycoreia logs could silently fail to be written; there is now a fallback folder, and the MelonLoader log names it.
+- Remote players' heads no longer spin, and avatars no longer spin during short lag.
+- The host returning to the main menu ends the session.
+- Error spam near unloaded doors; plorts can no longer appear slime-sized.
+
+### Known issues
+- Plort collectors only run while the host has that plot loaded.
+- The guest's expedition timer uses the guest's clock.
+- Slimes fed by a joining player far away from the host may sometimes drop no plorts. We are looking into it.
+
 ## [2.1.0-rc4] - 2026-11-16 (release candidate, testers wanted)
 
-Fourth test build of 2.1.0, again the diagnostic (deeplog) build only. It includes everything from the unreleased rc2 and rc3 builds. Every player in a session needs 2.1.0-rc4: it refuses rc1 and any other build (there is a new network message).
+Fourth test build of 2.1.0, again the diagnostic build only. It includes everything from the unreleased rc2 and rc3 builds. Every player in a session needs 2.1.0-rc4: it refuses rc1 and any other build (there is a new network message).
 
 **Please send logs.** After a session, send `UserData/Lycoreia/latest.log` and `UserData/Lycoreia/diagnostics.jsonl` from **both** players (host and guest) on our Discord, with a short note of what went wrong and roughly when. If Lycoreia cannot write to `UserData/Lycoreia`, the MelonLoader log now says where it writes instead ("log file: ...").
 
@@ -45,7 +121,7 @@ Please try especially:
 
 ## [2.1.0-rc1] - 2026-11-13 (release candidate, testers wanted)
 
-This is a test build of 2.1.0, shipped only as the diagnostic (deeplog) build so we can fix what you find. Every player in a session needs 2.1.0-rc1: it refuses 2.0.x and any other build.
+This is a test build of 2.1.0, shipped only as the diagnostic build so we can fix what you find. Every player in a session needs 2.1.0-rc1: it refuses 2.0.x and any other build.
 
 **Please send logs.** After a session, send `UserData/Lycoreia/latest.log` and `UserData/Lycoreia/diagnostics.jsonl` from **both** players (host and guest) on our Discord, with a short note of what went wrong and roughly when.
 

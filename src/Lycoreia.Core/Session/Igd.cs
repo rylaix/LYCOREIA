@@ -101,6 +101,7 @@ namespace Lycoreia
     {
         public static Action<string, string> Trace;
         public string Detail { get; private set; } = "";
+        public IPAddress LocalAddress => _control != null ? _local : _pmpLocal;
         static void Tr(string ev, string d) { try { Trace?.Invoke(ev, d); } catch (Exception) { } }
 
         sealed class Local { public IPAddress Ip; public string Name; public List<IPAddress> Gateways = new List<IPAddress>(); public override string ToString() => Name + " " + Ip + " (gw " + (Gateways.Count == 0 ? "none" : string.Join("/", Gateways)) + ")"; }
@@ -259,7 +260,7 @@ namespace Lycoreia
                 try
                 {
                     var d = await PmpExchange(p.l.Ip, p.g, Igd.PmpExternalRequest, 12, ct).ConfigureAwait(false);
-                    if (d != null && Igd.TryParsePmpExternal(d, out var ext)) { Tr("natpmp-reply", "gateway=" + p.g + " external=" + ext); return (p.g, p.l.Ip, ext); }
+                    if (d != null && Igd.TryParsePmpExternal(d, out var ext)) { Tr("natpmp-reply", "gateway=" + p.g + " external=" + NetAddr.Describe(ext)); return (p.g, p.l.Ip, ext); }
                 }
                 catch (Exception) { }
                 return ((IPAddress)null, (IPAddress)null, (IPAddress)null);

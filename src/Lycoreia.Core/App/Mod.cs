@@ -21,6 +21,9 @@ namespace Lycoreia
         public static DiagnosticsWriter Diagnostics { get; private set; }
         public static PacketWindow Packets { get; private set; }
         public static AutoHost AutoHost { get; private set; }
+        /// <summary>The host's UDP socket (inside the composite transport when Steam is on); STUN runs through it.</summary>
+        public static UdpTransport HostUdp { get; private set; }
+        public static HostAdvertiser Advertiser { get; } = new HostAdvertiser();
         /// <summary>Actor sync over the real game world; created by the game layer once the game context exists.</summary>
         public static Lycoreia.Actors.ActorSync Actors { get; set; }
         public static ChatDedup Chat { get; } = new ChatDedup();
@@ -48,7 +51,7 @@ namespace Lycoreia
             if (Session != null) return;
             try { DataFolder = PrepareDataFolder(userDataRoot); }
             catch (Exception e) { DataFolder = Path.Combine(userDataRoot, BuildInfo.DataFolder); Log.Warn($"data folder '{DataFolder}' could not be created ({e.GetType().Name}: {e.Message})"); }
-            // issue7: no latest.log on a player's machine and no hint why. Fall back (UserData -> %LOCALAPPDATA% -> temp) and always say where the log is.
+            // no latest.log on a player's machine and no hint why. Fall back (UserData -> %LOCALAPPDATA% -> temp) and always say where the log is.
             LogFolder = Log.OpenFirst(LogFolders.DefaultCandidates(DataFolder));
             Registry = MessageRegistry.FromAssembly(typeof(Mod).Assembly);
             Node = new Node(Registry, clock);
@@ -62,8 +65,24 @@ namespace Lycoreia
             Node.Rejected += Packets.Rejected;
             if (diagnostics) Diagnostics.Start(BuildInfo.Version);
             else Log.Info("diagnostics.jsonl is off (setting development_diagnostics is false)");
+            UpnpGateway.Trace = (ev, d) => Diagnostics?.Record("hosting", ev, d);   // router discovery/mapping details were never recorded
             AutoHost = new AutoHost(new UpnpGateway(), new NetshFirewall()) { PortStillHosted = p => Session.IsHost };
             Session.ServerStopped += () => AutoHost.ReleaseAsync();
+            // 2026-11-23: Steam networking (relay + NAT traversal by Steam) next to UDP; STUN for hole punching.
+            SteamNet.Trace = (ev, d) => Diagnostics?.Record("steam", ev, d);
+            Session.Listen = (port, v6) =>
+            {
+                var udp = UdpTransport.Listen(port, v6); HostUdp = udp;
+                if (!SteamNet.Ready) { Log.Info("hosting on UDP only (Steam: " + SteamNet.Unavailable + ")"); return udp; }
+                try { return new CompositeTransport(udp, new SteamTransport()); }
+                catch (Exception e) { Log.Warn("hosting without Steam: " + e.Message); return udp; }
+            };
+            Session.ServerStarted += () => SteamNet.AcceptIncoming = true;
+            Session.ServerStopped += () => { SteamNet.AcceptIncoming = false; Advertiser.Stop(); SteamNet.SetHostedCode(""); HostUdp = null; };
+            Session.OpenFor = ep => ep is SteamEndPoint ? new SteamTransport() : UdpTransport.Open(ep.AddressFamily);
+            Session.DiscoverMapped = t => t is UdpTransport u ? Stun.QueryAsync(u) : System.Threading.Tasks.Task.FromResult<System.Net.IPEndPoint>(null);
+            Advertiser.Post = a => Node.Post(a);
+            Advertiser.Changed += () => { SteamNet.SetHostedCode(Advertiser.PresenceCode); Diagnostics?.Record("hosting", "join-code", Advertiser.Summary); };
         }
 
         /// <summary>"Lycoreia" under the user data folder.</summary>
@@ -78,6 +97,7 @@ namespace Lycoreia
         {
             Log.Info("application quitting"); Watchdog.Stop(); Diagnostics?.Record("runtime", "application-quitting", "shutdown requested");
             try { shutdownDiscord?.Invoke(); } catch (Exception e) { Log.Warn("discord shutdown: " + e.Message); }
+            try { SteamNet.SetHostedCode(""); } catch { }
             AutoHost?.ReleaseBlocking();
             Session?.StopServer();
             Session?.Disconnect(null, true);

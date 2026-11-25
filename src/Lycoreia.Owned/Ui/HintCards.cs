@@ -62,6 +62,7 @@ internal static class HintCards
         panel.Children.Add(MenuPolish.Label("<b>" + MenuText.HintTitle + "</b>", w - 70f, 30f, 22f, UiColor.TextCategory, TextAlignmentOptions.Left, new Vector2(18f, h / 2f - 12f - 15f)));
         panel.Children.Add(MenuPolish.Label(body, w - 70f, 56f, 26f, UiColor.TextGeneral, TextAlignmentOptions.TopLeft, new Vector2(18f, -8f)));
         var rt = panel.Render(UiCanvas.Root);
+        if (panel.Picture) UiPlates.Apply(panel.Picture!, PlateKind.Card, height: h);
         rt.gameObject.name = "LycoreiaHint_" + key;
         rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0f);
         rt.pivot = new Vector2(0.5f, 0f);

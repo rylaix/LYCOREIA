@@ -34,9 +34,12 @@ namespace Lycoreia.Tests
                     T.True(MapText.Label("x", "", "Ann", true).Contains("You are on it") && !MapText.Label("x", "", "Ann", true).Contains("Pinned"), "en mine, no author");
                     CoopText.SetLangForTests("ru");
                     var ru = MapText.Label("Покормить", "Бо", "Аня", false);
-                    T.True(ru.Contains("Задание") && ru.Contains("Аня занимается этим") && ru.Contains("Автор: Бо"), "ru: " + ru);
+                    T.True(ru.Contains("Задание") && ru.Contains("Выполняет: Аня") && ru.Contains("Автор: Бо"), "ru: " + ru);
                     T.True(MapText.Label("x", "", "", false).Contains("Свободно"), "ru open");
-                    T.True(MapText.Label("x", "", "", true).Contains("Ты этим занимаешься"), "ru mine");
+                    T.True(MapText.Label("x", "", "", true).Contains("Задание у тебя"), "ru mine");
+                    CoopText.SetLangForTests("es");
+                    var es = MapText.Label("Alimentar", "Bo", "Ana", false);
+                    T.True(es.Contains("Tarea") && es.Contains("Ana se encarga") && es.Contains("Creada por Bo"), "es: " + es);
                     foreach (var s in new[] { en, ru }) T.True(s.IndexOf((char)0x2014) < 0 && s.IndexOf((char)0x2013) < 0, "no long dash");
                 }
                 finally { CoopText.SetLangForTests(null); }

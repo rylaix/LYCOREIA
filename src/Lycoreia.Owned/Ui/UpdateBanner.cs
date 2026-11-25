@@ -52,6 +52,7 @@ internal static class UpdateBanner
             panel.Children.Add(MenuPolish.Button(MenuText.OpenSource(source.Source), bw, 46f, () => UnityEngine.Application.OpenURL(source.Url), true, new Vector2(x, -height / 2f + 12f + 23f)));
         }
         var rt = panel.Render(UiCanvas.Root);
+        if (panel.Picture) UiPlates.Apply(panel.Picture!, PlateKind.Card, height: height);
         rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 1f);
         rt.pivot = new Vector2(0.5f, 1f);
         rt.anchoredPosition = new Vector2(0f, -14f);

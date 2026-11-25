@@ -50,7 +50,8 @@ namespace Lycoreia.Tests
                 var th = RoundTrip(new SanctuaryTheme { ThemeReferenceId = "t", IsOwned = true }); T.True(th.IsOwned);
                 var pr = RoundTrip(new ProgressionUnlocks { BlueprintIds = { 4 }, Appearances = { new ProgressionUnlocks.AppearanceUnlock { SlimeId = 3, SaveSet = 2 } }, OwnedPalettes = { "pal" } });
                 T.Eq(4, pr.BlueprintIds[0]); T.Eq(2, pr.Appearances[0].SaveSet); T.Eq("pal", pr.OwnedPalettes[0]);
-                var sr = RoundTrip(new ShopPurchaseRequest { RequestId = Guid.NewGuid(), ShopAssetTag = "shop", ItemAssetGuid = "item", Count = 2 }); T.Eq("item", sr.ItemAssetGuid);
+                var sr = RoundTrip(new ShopPurchaseRequest { RequestId = Guid.NewGuid(), ShopAssetTag = "shop", ItemAssetGuid = "item", Count = 2, CategoryName = "toys", UnlockType = 3 }); T.Eq("item", sr.ItemAssetGuid); T.Eq("toys", sr.CategoryName); T.Eq(3, sr.UnlockType);
+                var fs = RoundTrip(new AutoFeederSpeed { Id = "plot1", Speed = 2 }); T.Eq("plot1", fs.Id); T.Eq(2, fs.Speed);
                 var up = RoundTrip(new PlayerUpgrade { UpgradeId = 5, Level = -1, Kind = PlayerUpgradeKind.Request, RequestId = Guid.NewGuid() }); T.Eq(PlayerUpgradeKind.Request, up.Kind); T.Eq(-1, up.Level);
                 T.True(Lycoreia.Owned.ResourceNodeSyncPolicy.VerifyRules());
             });

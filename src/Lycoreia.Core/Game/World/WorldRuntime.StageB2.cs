@@ -11,7 +11,7 @@ namespace Lycoreia.Game.World
     {
         static void InitStageB2(Session s, SnapshotHost snap)
         {
-            DroneAdapter.Install(s, snap); GardenAdapter.Install(s, snap); SiloAdapter.Install(s, snap); LinkAdapter.Install(s, snap); MarketAdapter.Install(Market);
+            DroneAdapter.Install(s, snap); GardenAdapter.Install(s, snap); SiloAdapter.Install(s, snap); FeederSpeedAdapter.Install(s, snap); LinkAdapter.Install(s, snap); MarketAdapter.Install(Market);
             ResourceNodeAdapter.Install(s, snap); GadgetAdapter.Install(s, snap);
             snap.Register(SnapStep.Prices, ctx => { var m = new Lycoreia.Net.Messages.MarketPrices(); foreach (var kv in _lastPrices()) m.Prices.Add(new Lycoreia.Net.Messages.IntPair { A = kv.Key, B = kv.Value }); if (m.Prices.Count > 0) ctx.Send(m); });
         }

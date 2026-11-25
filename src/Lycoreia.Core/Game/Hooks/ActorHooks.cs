@@ -34,29 +34,41 @@ namespace Lycoreia.Game.Hooks
     {
         static readonly ChickenCap Chickens = new ChickenCap();
 
-        static void Postfix(GameObject __result)
+        static void Postfix(GameObject __result) => Publish(__result, VacuumExpelHook.Depth > 0, out _);
+
+        /// <summary>
+        /// Publishes a locally created actor (the hook, and LycoreiaApi.PublishSpawn for actors other mods create through
+        /// GameModel.InstantiateActorModel + InstantiateActorFromModel, which this hook never sees). exempt = no wild/chicken caps and no
+        /// guest backoff (vac shots; API spawns while cheats are allowed). True when the actor was published.
+        /// </summary>
+        internal static bool Publish(GameObject go, bool exempt, out string reason)
         {
+            reason = null;
             try
             {
-                if (!HookGuard.Active || Applying.Active || __result == null) return;
-                var actor = __result.GetComponent<IdentifiableActor>(); if (actor == null || actor._model == null) return;
-                var model = actor._model; int typeId = ActorTypes.IdOf(model.ident); if (typeId == 0) return;
-                if (__result.GetComponent<Il2CppMonomiPark.SlimeRancher.Drone.DroneStation>() != null) return;                // drones are never world actors
+                if (!HookGuard.Active) { reason = "not in a session"; return false; }
+                if (Applying.Active) { reason = "applying network state"; return false; }
+                if (go == null) { reason = "no object"; return false; }
+                var actor = go.GetComponent<IdentifiableActor>(); if (actor == null || actor._model == null) { reason = "not an actor"; return false; }
+                var model = actor._model; int typeId = ActorTypes.IdOf(model.ident); if (typeId == 0) { reason = "unknown actor type"; return false; }
+                if (go.GetComponent<Il2CppMonomiPark.SlimeRancher.Drone.DroneStation>() != null) { reason = "drone"; return false; }   // drones are never world actors
                 var pos = model.GetPos(); var rot = model.GetRot(); var p = new Vec3(pos.x, pos.y, pos.z);
-                bool vacShot = VacuumExpelHook.Depth > 0; bool ranch = GameActorWorld.Ranch.Contains(p) == true;
-                if (!vacShot && GameActorWorld.IsChicken(model.ident) && !ChickenAllowed(p, ranch, typeId)) { DropLocally(__result); return; }
-                var e = new ActorEntry { Id = model.actorId.Value, TypeId = typeId, Scene = SceneGroups.IdOf(model.sceneGroup), Position = p, Rotation = new Quat(rot.x, rot.y, rot.z, rot.w), Kind = vacShot ? SpawnKind.VacShot : ranch ? SpawnKind.Ranch : SpawnKind.Normal };
-                if (e.Kind == SpawnKind.Normal && Mod.IsGuest && Mod.Actors.Backoff.Blocks(p, Time.unscaledTimeAsDouble)) { DropLocally(__result); return; }   // backed off after a host refusal
+                bool ranch = GameActorWorld.Ranch.Contains(p) == true;
+                if (!exempt && GameActorWorld.IsChicken(model.ident) && !ChickenAllowed(p, ranch, typeId)) { DropLocally(go); reason = "chicken cap"; return false; }
+                var e = new ActorEntry { Id = model.actorId.Value, TypeId = typeId, Scene = SceneGroups.IdOf(model.sceneGroup), Position = p, Rotation = new Quat(rot.x, rot.y, rot.z, rot.w), Kind = exempt ? SpawnKind.VacShot : ranch ? SpawnKind.Ranch : SpawnKind.Normal };
+                SlimeRadiance.Fill(e, model);                                                                // vac shots of radiant ammo are radiant already
+                if (e.Kind == SpawnKind.Normal && Mod.IsGuest && Mod.Actors.Backoff.Blocks(p, Time.unscaledTimeAsDouble)) { DropLocally(go); reason = "host refused spawns here a moment ago"; return false; }
                 if (!Mod.Actors.GuestMayPublish(e.Id))
                 {
                     // the guest allocator is not inside our block yet (before the snapshot) or was moved out: the host would refuse this id
                     Mod.Diagnostics?.Record("actors", "spawn-dropped", $"id={e.Id}; type={model.ident?.name}; reason=id-block");
-                    DropLocally(__result); return;
+                    DropLocally(go); reason = "actor id outside this player's block (still joining?)"; return false;
                 }
                 Mod.Actors.PublishSpawn(e);
                 ActorRuntime.Motion.Remove(e.Id);
+                return true;
             }
-            catch (Exception ex) { HookGuard.Fail("InstantiateActor", ex); }
+            catch (Exception ex) { HookGuard.Fail("InstantiateActor", ex); reason = "error: " + ex.Message; return false; }
         }
 
         /// <summary>Wild chicken cap plus a higher 30 m ranch population ceiling to stop runaway local spawn bursts.</summary>

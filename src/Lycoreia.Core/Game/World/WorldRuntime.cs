@@ -115,16 +115,21 @@ namespace Lycoreia.Game.World
                     // then threw a native NRE that the 0.25 s pending retry repeated for every key (2026-11-08 guest stutter).
                     if (m.gameObj == null) return;
                     var primary = m.gameObj.GetComponent<WorldStatePrimarySwitch>();
-                    if (primary != null) primary.SetStateForAll(m.state, snapshot); else m.NotifyParticipants();
+                    if (primary != null) { primary.SetStateForAll(m.state, snapshot); return; }
+                    // rc7 (game binary analysis 2026-11-23): an invisible switch (Labyrinth beam doors: MultipleBeamSwitch -> Activate) opens
+                    // its doors only in its own SetStateForAll (Switchables[i].SetState + OnUp/OnDown UnityEvents). NotifyParticipants only
+                    // re-binds the model, so the host's open beam door stayed shut on the guest.
+                    var invisible = m.gameObj.GetComponent<Il2CppMonomiPark.SlimeRancher.World.WorldStateInvisibleSwitch>();
+                    if (invisible != null) invisible.SetStateForAll(m.state, snapshot); else m.NotifyParticipants();
                 }),
                 m => (m.Id, m.State), (k, v) => new SwitchActivate { Id = k, State = (int)v });
             Doors = new KeyedKind<AccessDoorModel, Lycoreia.Net.Messages.AccessDoor>("door", s,
                 new KeyedModelAdapter<AccessDoorModel>(g => g.doors, m => (int)m.state, (m, v) => m.state = (Il2CppMonomiPark.World.AccessDoor.State)(int)v, m =>
                 {
-                    if (m.gameObj == null) return;                                              // unloaded door: the model holds the state (issue4: 2338 NREs)
+                    if (m.gameObj == null) return;                                              // unloaded door: the model holds the state (2338 NREs)
                     var door = m.gameObj.GetComponent<Il2CppMonomiPark.World.AccessDoor>();
                     if (door != null) door.ForceUpdate(false); else m.NotifyParticipants();     // the native setter skips an equal model state: animate directly
-                }),   // unloaded door: the model holds the state (issue4: 2338 NREs, 4 retries/s per door)
+                }),   // unloaded door: the model holds the state (2338 NREs, 4 retries/s per door)
                 m => (m.Id, m.State), (k, v) => new Lycoreia.Net.Messages.AccessDoor { Id = k, State = (int)v }, DoorMerge);
             Slots = new KeyedKind<PuzzleSlotModel, Lycoreia.Net.Messages.PuzzleSlot>("puzzle-slot", s,
                 new KeyedModelAdapter<PuzzleSlotModel>(g => g.slots, m => m.filled ? 1 : 0, (m, v) => m.filled = v > 0, m => { if (m.gameObj != null) m.NotifyParticipants(); }),

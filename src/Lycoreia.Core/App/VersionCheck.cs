@@ -18,6 +18,39 @@ namespace Lycoreia
 
         public static bool IsPreRelease(string v) => StripPreRelease(v) != (v ?? "").Trim().TrimStart('v', 'V');
 
+        /// <summary>
+        /// Full order: release triple, then a release above any pre-release of it, then the pre-release parts compared dot by dot
+        /// ("rc1" < "rc4" < "rc4.1" < "rc10"; letters first, then the number). Unparsable versions compare equal.
+        /// </summary>
+        public static int Compare(string a, string b)
+        {
+            if (!TryParse(a, out var va) || !TryParse(b, out var vb)) return 0;
+            int c = va.CompareTo(vb); if (c != 0) return Math.Sign(c);
+            string pa = PreRelease(a), pb = PreRelease(b);
+            if (pa.Length == 0 || pb.Length == 0) return pa.Length == pb.Length ? 0 : pa.Length == 0 ? 1 : -1;
+            var sa = pa.Split('.'); var sb = pb.Split('.');
+            for (int i = 0; i < Math.Max(sa.Length, sb.Length); i++)
+            {
+                if (i >= sa.Length) return -1; if (i >= sb.Length) return 1;
+                SplitPart(sa[i], out var la, out var na); SplitPart(sb[i], out var lb, out var nb);
+                c = string.Compare(la, lb, StringComparison.OrdinalIgnoreCase); if (c != 0) return Math.Sign(c);
+                c = na.CompareTo(nb); if (c != 0) return Math.Sign(c);
+            }
+            return 0;
+        }
+
+        static string PreRelease(string v)
+        {
+            v = (v ?? "").Trim().TrimStart('v', 'V'); int i = v.IndexOf('-'); if (i < 0) return "";
+            v = v.Substring(i + 1); int plus = v.IndexOf('+'); return plus < 0 ? v : v.Substring(0, plus);
+        }
+
+        static void SplitPart(string s, out string letters, out long number)
+        {
+            int i = 0; while (i < s.Length && !char.IsDigit(s[i])) i++;
+            letters = s.Substring(0, i); if (!long.TryParse(s.Substring(i), out number)) number = 0;
+        }
+
         public static bool TryParse(string v, out System.Version parsed)
         {
             v = StripPreRelease(v); int parts = v.Split('.').Length; for (; parts < 3; parts++) v += ".0";   // was a while loop that never ended for "1" or junk text
@@ -57,9 +90,8 @@ namespace Lycoreia
 
         public static ModVersionVerdict CheckMod(string installed, string latestText)
         {
-            if (!TryParse(installed, out var mine) || !TryParse(latestText, out var latest)) return ModVersionVerdict.UpToDate;
-            int c = mine.CompareTo(latest);
-            if (c == 0) { bool preMine = IsPreRelease(installed), preLatest = IsPreRelease(latestText); if (preMine != preLatest) c = preMine ? -1 : 1; }   // 2.1.0-rc1 < 2.1.0
+            if (!TryParse(installed, out _) || !TryParse(latestText, out _)) return ModVersionVerdict.UpToDate;
+            int c = Compare(installed, latestText);                                                     // 2.1.0-rc1 < 2.1.0-rc4 < 2.1.0-rc4.1 < 2.1.0
             return c < 0 ? ModVersionVerdict.Outdated : c > 0 ? ModVersionVerdict.Newer : ModVersionVerdict.UpToDate;
         }
 

@@ -53,11 +53,13 @@ internal sealed partial class LycoreiaMenu
     private RectTransform? content;
     private Page page = Page.Home;
     private bool joinByCode = true;
+    private bool joinSteam = true;   // rc6: the Steam friends tab is the first tab
     private string signature = string.Empty;
     private float nextRefreshAt;
     private string notice = string.Empty;
 
     private string joinCodeInput = string.Empty;
+    private string letInInput = string.Empty;
     private string joinIpInput = string.Empty;
     private string joinPortInput = string.Empty;
     private string hostPortInput = string.Empty;
@@ -321,7 +323,7 @@ internal sealed partial class LycoreiaMenu
     private void OnUpdate()
     {
         FitToScreen();
-        InputGate.EnsurePointer("menu");                                                        // issue7: clicks must work whatever state the native menu left the input actions in
+        InputGate.EnsurePointer("menu");                                                        // clicks must work whatever state the native menu left the input actions in
         if (probePending) { probePending = false; OwnedLog.LogDiagnostic("menu", "raycast-probe", TopHit()); }
         KeepInputFocus();
         InputGate.Typing(IsTyping(), false);                                                    // 2.1: keys typed here never reach the game or the pause menu
@@ -332,6 +334,7 @@ internal sealed partial class LycoreiaMenu
         if (now < nextRefreshAt)
             return;
         nextRefreshAt = now + RefreshSeconds;
+        UpdateLiveLines();
 
         // Live state (connecting -> connected, auto host result, player list) without losing typing focus.
         var current = ComputeSignature();
@@ -385,7 +388,7 @@ internal sealed partial class LycoreiaMenu
     {
         var selected = EventSystem.current ? EventSystem.current.currentSelectedGameObject : null;
         var field = selected ? selected!.GetComponent<TMP_InputField>() : null;
-        // issue7: a field that merely stays SELECTED (after Esc, or after a click on a button) is not typing; only a focused one holds the keys
+        // a field that merely stays SELECTED (after Esc, or after a click on a button) is not typing; only a focused one holds the keys
         return InputGateState.IsTyping(lockedInput, field, field && field!.isFocused);
     }
 
@@ -467,7 +470,7 @@ internal sealed partial class LycoreiaMenu
         var players = string.Join(",", Roster.GetAllPlayers().Select(p => p.Username));
         return $"{page}|{joinByCode}|{InGame}|{ModFacade.Client.IsConnecting}|{ModFacade.Client.IsConnected}|" +
                $"{ModFacade.Server.IsRunning}|{players}|{ui?.HostJoinCode}|{ui?.IsHostAutoInProgress}|" +
-               $"{ui?.HostAutoStage}|{ui?.HostAutoError}|{ui?.NativeLastError}|{notice}|{DirectLaunch.StatusText}|{DirectLaunch.LastError}|{Lycoreia.Mod.Update?.Kind}|{CoopSignature()}";
+               $"{ui?.HostAutoStage}|{ui?.HostAutoError}|{ui?.HostAutoWarning}|{ui?.HostCodePending}|{ui?.HostLetIn}|{Lycoreia.Mod.Session?.PunchWaiting}|{Lycoreia.Mod.Session?.Route}|{joinSteam}|{Lycoreia.SteamNet.Unavailable}|{Lycoreia.Mod.Session?.LetInCode}|{string.Join(",", Lycoreia.SteamNet.FriendsHosting.Select(f => f.Name + f.Code))}|{ui?.NativeLastError}|{notice}|{DirectLaunch.StatusText}|{DirectLaunch.LastError}|{Lycoreia.Mod.Update?.Kind}|{CoopSignature()}";
     }
 
     [HideFromIl2Cpp]
@@ -521,6 +524,7 @@ internal sealed partial class LycoreiaMenu
     {
         DestroyContent();
         signature = ComputeSignature();
+        expProgressLine = expTeamLine = null;
 
         try
         {
@@ -589,7 +593,18 @@ internal sealed partial class LycoreiaMenu
         }
         else if (ModFacade.Client.IsConnecting)
         {
-            rows.Add(Label(MenuText.Connecting));
+            rows.Add(Label(string.IsNullOrEmpty(Lycoreia.Mod.Session.Route) ? MenuText.Connecting : MenuText.ConnectingVia(Lycoreia.Mod.Session.Route)));
+            if (Lycoreia.Mod.Session.PunchWaiting)
+            {
+                rows.Add(Label(MenuText.WaitingLetIn, UiColor.TextCategory));
+                var letIn = Lycoreia.Mod.Session.LetInCode;
+                if (string.IsNullOrEmpty(letIn)) rows.Add(Label(MenuText.LetInPending));
+                else
+                {
+                    rows.Add(Label(MenuText.YourLetInCode(letIn)));
+                    rows.Add(Button(MenuText.CopyLetIn, () => { GUIUtility.systemCopyBuffer = letIn; notice = MenuText.CodeCopied; }));
+                }
+            }
             rows.Add(Button(MenuText.Cancel, () => ModFacade.Client.Disconnect()));
         }
         else if (ModFacade.Client.IsConnected)
@@ -654,7 +669,8 @@ internal sealed partial class LycoreiaMenu
         return new UiPanel
         {
             Color = UiColor.Primary,
-            CornerRadius = 24,
+            CornerRadius = UiPlates.RadiusCard,
+            Plate = true,
             Size = new Vector2(PanelWidth, panelHeight),
             Children = rows
         };
@@ -664,6 +680,7 @@ internal sealed partial class LycoreiaMenu
     private void AddMainMenuPage(List<UiNode> rows)
     {
         rows.Add(Label(MenuText.PlayingAs(ModFacade.Username)));
+        AddSteamStatus(rows);
         rows.Add(Button(MenuText.HostWorld, () => Navigate(Page.Host)));
         rows.Add(Button(MenuText.JoinFriend, () => Navigate(Page.Join)));
         AddError(rows, DirectLaunch.LastError);
@@ -672,6 +689,15 @@ internal sealed partial class LycoreiaMenu
     }
 
     private const int MaxListedSaves = 5;
+
+    /// <summary>rc6: one line saying whether Steam connect works, on every Multiplayer home page.</summary>
+    [HideFromIl2Cpp]
+    private static void AddSteamStatus(List<UiNode> rows)
+    {
+        if (Lycoreia.SteamNet.Ready) rows.Add(Label(MenuText.SteamStatusReady, UiColor.TextCategory));
+        else if ((Lycoreia.SteamNet.Unavailable ?? "").StartsWith("Steam library not loaded") || Lycoreia.SteamNet.Unavailable == "not checked") rows.Add(Label(MenuText.SteamStatusStarting));
+        else rows.Add(Label(MenuText.SteamStatusOff(Lycoreia.SteamNet.Unavailable ?? "?"), UiColor.TextWarning));
+    }
 
     [HideFromIl2Cpp]
     private void AddMainMenuHostPage(List<UiNode> rows, MultiplayerUI ui)
@@ -773,6 +799,7 @@ internal sealed partial class LycoreiaMenu
     private void AddInGameHomePage(List<UiNode> rows)
     {
         rows.Add(Label(MenuText.PlayingAs(ModFacade.Username)));
+        AddSteamStatus(rows);
         rows.Add(Button(MenuText.HostThisWorld, () => Navigate(Page.Host)));
         rows.Add(Button(MenuText.JoinWorld, () => Navigate(Page.Join)));
         rows.Add(Label(MenuText.JoinReplaces,
@@ -786,11 +813,27 @@ internal sealed partial class LycoreiaMenu
     private void AddJoinPage(List<UiNode> rows, MultiplayerUI ui)
     {
         rows.Add(Heading(MenuText.JoinHeading));
-        rows.Add(Row(
-            Button(MenuText.TabJoinCode, () => { joinByCode = true; Rebuild(); }, width: 420f, alternative: !joinByCode),
-            Button(MenuText.TabIp, () => { joinByCode = false; Rebuild(); }, width: 420f, alternative: joinByCode)));
+        rows.Add(Tabs(
+            (MenuText.TabSteam, joinSteam, () => { joinSteam = true; Rebuild(); }),
+            (MenuText.TabJoinCode, !joinSteam && joinByCode, () => { joinSteam = false; joinByCode = true; Rebuild(); }),
+            (MenuText.TabIp, !joinSteam && !joinByCode, () => { joinSteam = false; joinByCode = false; Rebuild(); })));
 
-        if (joinByCode)
+        if (joinSteam)
+        {
+            if (!Lycoreia.SteamNet.Ready) rows.Add(Label(MenuText.SteamNotHere(Lycoreia.SteamNet.Unavailable ?? "?"), UiColor.TextWarning));
+            else
+            {
+                rows.Add(Label(MenuText.SteamJoinHelp));
+                if (Lycoreia.SteamNet.FriendsHosting.Count == 0) rows.Add(Label(MenuText.SteamNobodyHosting, UiColor.TextCategory));
+                foreach (var f in Lycoreia.SteamNet.FriendsHosting.Take(6))
+                {
+                    var friendCode = f.Code;
+                    rows.Add(Button(MenuText.JoinSteamFriend(f.Name), () => { joinByCode = true; joinCodeInput = friendCode; JoinNow(ui); }));
+                    if (!string.IsNullOrEmpty(f.Version) && f.Version != Lycoreia.ModVersion.Value) rows.Add(Label(MenuText.FriendOtherVersion(f.Version), UiColor.TextWarning));
+                }
+            }
+        }
+        else if (joinByCode)
         {
             rows.Add(LabeledInput(MenuText.JoinCode, joinCodeInput, MenuText.JoinCodePlaceholder, v => joinCodeInput = v));
             rows.Add(Button(MenuText.Join, () => JoinNow(ui)));
@@ -857,6 +900,8 @@ internal sealed partial class LycoreiaMenu
         rows.Add(Label(MenuText.PortLine(ModFacade.StreamerMode ? MenuText.Hidden : ModFacade.Server.Port.ToString())));
 
         var code = ui.HostJoinCode;
+        if (ui.HostCodePending) rows.Add(Label(MenuText.CodePending));
+        AddError(rows, ui.HostAutoWarning);
         if (!string.IsNullOrWhiteSpace(code))
         {
             rows.Add(Label(MenuText.CodeLine(ModFacade.StreamerMode ? MenuText.Hidden : code)));
@@ -865,6 +910,24 @@ internal sealed partial class LycoreiaMenu
                 GUIUtility.systemCopyBuffer = code;
                 notice = MenuText.CodeCopied;
             }));
+            var lanIp = Lycoreia.Mod.AutoHost?.LanIp;
+            if (lanIp != null) rows.Add(Label(MenuText.LanLine(ModFacade.StreamerMode ? MenuText.Hidden : lanIp + ":" + ModFacade.Server.Port)));
+            AddError(rows, MenuText.HostReachWarning(Lycoreia.Mod.AutoHost?.Reach ?? Lycoreia.HostReach.Unknown));
+            if (Lycoreia.Mod.AutoHost?.FirewallFailed == true && Lycoreia.Mod.AutoHost?.MappedPort > 0) AddError(rows, MenuText.HostFirewallWarning);
+            if (ui.HostViaSteam) rows.Add(Label(MenuText.SteamHostLine, UiColor.TextCategory));
+            if (ui.HostLetIn)
+            {
+                rows.Add(Heading(MenuText.LetInHeading));
+                rows.Add(Label(MenuText.LetInHelp));
+                rows.Add(LabeledInput(MenuText.LetInField, letInInput, MenuText.LetInPlaceholder, v => letInInput = v));
+                rows.Add(Button(MenuText.LetInButton, () =>
+                {
+                    ui.NativeLetIn(letInInput);
+                    if (string.IsNullOrEmpty(ui.NativeLastError)) { notice = MenuText.LetInStarted; letInInput = string.Empty; }
+                    Rebuild();
+                }));
+                AddError(rows, ui.NativeLastError);
+            }
         }
 
         AddPlayers(rows);
@@ -882,6 +945,7 @@ internal sealed partial class LycoreiaMenu
     private void AddConnectedPage(List<UiNode> rows)
     {
         rows.Add(Heading(MenuText.Connected));
+        rows.Add(Label(MenuText.ConnectedVia(Lycoreia.Mod.Session.Route), UiColor.TextCategory));
         AddPlayers(rows);
         if (InGame) rows.Add(Button(MenuText.BoardButton, () => Navigate(Page.Coop)));
         rows.Add(Button(MenuText.RequestResync, () =>
@@ -1412,7 +1476,7 @@ internal sealed partial class LycoreiaMenu
         => new()
         {
             Size = new Vector2(width, RowHeight),
-            CornerRadius = 16,
+            CornerRadius = UiPlates.RadiusLabel,
             Style = alternative ? UiButtonStyle.Alternative : UiButtonStyle.Normal,
             Interactable = interactable,
             OnClick = onClick,
@@ -1473,7 +1537,7 @@ internal sealed partial class LycoreiaMenu
             new UiInput
             {
                 Size = new Vector2(510f, RowHeight - 6f),
-                CornerRadius = 12,
+                CornerRadius = UiPlates.RadiusLabel,
                 Value = value ?? string.Empty,
                 Placeholder = placeholder,
                 ContentType = contentType,
@@ -1488,7 +1552,7 @@ internal sealed partial class LycoreiaMenu
         => new()
         {
             Size = new Vector2(48f, 48f),
-            CornerRadius = 10,
+            CornerRadius = UiPlates.RadiusLabel,
             Value = value,
             BackgroundColor = UiColor.Secondary,
             CheckColor = UiColor.Accent,

@@ -49,17 +49,17 @@ namespace Lycoreia
         public static UpdateStatus Evaluate(string installed, IEnumerable<PublishedVersion> sources)
         {
             var st = new UpdateStatus { Installed = installed, Kind = UpdateKind.Unknown };
-            if (!VersionCheck.TryParse(installed, out var mine)) return st;
+            if (!VersionCheck.TryParse(installed, out _)) return st;
             var known = sources.Where(s => s.Version != null && VersionCheck.TryParse(s.Version, out _)).ToList();
             if (known.Count == 0) return st;
-            System.Version V(string v) { VersionCheck.TryParse(v, out var p); return p; }
-            var newest = known.Select(s => V(s.Version)).Max();
-            st.Newest = known.First(s => V(s.Version).Equals(newest)).Version;
-            int c = mine.CompareTo(newest);
+            // pre-release aware (an rc1 player was told "UpToDate" while rc4 was public)
+            string newest = known[0].Version; foreach (var s in known) if (VersionCheck.Compare(s.Version, newest) > 0) newest = s.Version;
+            st.Newest = newest;
+            int c = VersionCheck.Compare(installed, newest);
             if (c < 0)
             {
                 st.Kind = UpdateKind.UpdateAvailable;
-                st.Offering = known.Where(s => V(s.Version).Equals(newest)).ToList();
+                st.Offering = known.Where(s => VersionCheck.Compare(s.Version, newest) == 0).ToList();
                 st.Message = $"Lycoreia {st.Newest} is available (you have {installed}). Download it from {string.Join(" or ", st.Offering.Select(s => s.Source))}. Every player in a session needs the same version.";
             }
             else if (c > 0)

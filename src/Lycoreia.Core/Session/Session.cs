@@ -82,7 +82,7 @@ namespace Lycoreia
             Node.On<ModSyncReply>(Side.Host, OnModSyncReply);
             Node.On<Approve>(Side.Guest, OnApprove);
             Node.On<Deny>(Side.Guest, OnDeny);
-            Node.On<Close>(Side.Guest, (c, m) => { Notice?.Invoke("Server closed!"); Disconnect("Server closed!", false); });
+            Node.On<Close>(Side.Guest, (c, m) => { Notice?.Invoke(Text.StatusText.ServerClosed); Disconnect(Text.StatusText.ServerClosed, false); });
             Node.On<Heartbeat>(Side.Host, (c, m) => { });
             Node.On<HeartbeatAck>(Side.Guest, (c, m) => { });
             Node.On<ResyncRequest>(Side.Host, (c, m) => SafeInvoke2(ResyncRequested, c.Sender, m.Automatic));
@@ -109,8 +109,8 @@ namespace Lycoreia
         /// <summary>Starts hosting. Returns null on success or the refusal text.</summary>
         public string StartServer(int port, bool ipv6 = true)
         {
-            if (IsGuest) return "Cannot host while connected to another world.";
-            if (IsHost) return "A server is already running.";
+            if (IsGuest) return Text.StatusText.CannotHostAsGuest;
+            if (IsHost) return Text.StatusText.AlreadyRunning;
             IDatagramTransport t;
             try { t = Listen(port, ipv6); }
             catch (Exception e) { return DescribeSocketError(e); }
@@ -119,22 +119,42 @@ namespace Lycoreia
         public string StartServer(IDatagramTransport t)
         {
             if (BlockedReason != null) return BlockedReason;
-            if (IsGuest) return "Cannot host while connected to another world.";
-            if (IsHost) return "A server is already running.";
+            if (IsGuest) return Text.StatusText.CannotHostAsGuest;
+            if (IsHost) return Text.StatusText.AlreadyRunning;
             LocalId = Identity.ForHost(DevMode); HostId = LocalId; _gen++;
             Players.Clear(); _colours.Clear(); Players[LocalId] = new PlayerInfo { Id = LocalId, Name = LocalName, ShortId = Identity.ShortId(LocalId), IsHost = true };
             t.Faulted += OnFault;
             Node.Attach(Role.Host, t, LocalId);
             _lastHostBeat = _clock();
             SafeInvoke(ServerStarted);
-            Notice?.Invoke("The world is now open to others!");
+            Notice?.Invoke(Text.StatusText.WorldOpen);
+            return null;
+        }
+
+        // ---- host side of UDP hole punching: send a few junk datagrams to the guest's public endpoint so our own NAT lets its packets in.
+        public const int PunchEveryMs = 250, PunchForMs = 60_000;
+        static readonly byte[] PunchBytes = System.Text.Encoding.ASCII.GetBytes("LYCPUNCH");   // not a valid frame: the guest's Link drops it
+        readonly List<(IPEndPoint ep, long until, long next)> _punches = new List<(IPEndPoint, long, long)>();
+        /// <summary>Host: start letting in the guest whose let-in code was pasted. Returns null or an error text.</summary>
+        public string LetIn(string letInCode)
+        {
+            if (!IsHost) return Text.StatusText.StartHostingFirst;
+            if (!JoinCode.TryDecodeLetIn(letInCode, out var ep)) return Text.StatusText.InvalidLetIn;
+            return LetIn(ep);
+        }
+        public string LetIn(IPEndPoint ep)
+        {
+            if (!IsHost) return Text.StatusText.StartHostingFirst;
+            _punches.RemoveAll(p => p.ep.Equals(ep)); _punches.Add((ep, _clock() + PunchForMs, 0));
+            Log.Info($"letting in {NetAddr.Describe(ep.Address)} port {ep.Port} for {PunchForMs / 1000} s");
             return null;
         }
 
         public void StopServer()
         {
+            _punches.Clear();
             if (!IsHost) return;
-            Notice?.Invoke("Server closed!");
+            Notice?.Invoke(Text.StatusText.ServerClosed);
             Node.SendToAll(new Close());
             SafeInvoke(ServerStopped);
             _closing.Clear(); Players.Clear(); _colours.Clear(); Mods.ClearNetIds(); Node.Detach(); Joined = false;
@@ -142,7 +162,7 @@ namespace Lycoreia
 
         static string DescribeSocketError(Exception e)
         {
-            if (e is SocketException se && se.SocketErrorCode == SocketError.AddressAlreadyInUse) return "That port is already in use. Pick another port.";
+            if (e is SocketException se && se.SocketErrorCode == SocketError.AddressAlreadyInUse) return Text.StatusText.PortInUse;
             return "Could not start the server: " + e.Message;
         }
 
@@ -152,6 +172,7 @@ namespace Lycoreia
             if (string.IsNullOrEmpty(m.PlayerId) || !m.PlayerId.StartsWith(Identity.Prefix, StringComparison.Ordinal)) { Deny(peer, "Invalid player id."); return; }
             var mismatch = VersionCheck.DescribeBuildMismatch(Build, m.Build);
             if (mismatch != null) { Deny(peer, mismatch); return; }
+            if (peer.Registered && peer.PlayerId == m.PlayerId) { Log.Info($"{peer.Name} sent Connect again (retry while waiting to be let in); ignored"); return; }
             if (peer.Registered) Log.Warn($"{m.PlayerId} sent Connect again from the same endpoint; keeping its entry");
             var other = Node.FindByPlayer(m.PlayerId);
             if (other != null && other != peer) { Log.Warn($"replacing stale connection of {m.PlayerId}", LogTarget.Main); RemoveClient(other, "replaced"); }
@@ -299,21 +320,83 @@ namespace Lycoreia
             return Connect(new IPEndPoint(ip, port));
         }
 
-        public string Connect(IPEndPoint ep)
+        /// <summary>One way to reach a host. AckMs: how long to wait for an answer before the next target. Punch: the host must let us in.</summary>
+        public readonly struct ConnectTarget
         {
-            string refusal = CheckConnectable(ep); if (refusal != null) return refusal;
+            public readonly EndPoint Ep; public readonly int AckMs; public readonly bool Punch;
+            public ConnectTarget(EndPoint ep, int ackMs, bool punch = false) { Ep = ep; AckMs = ackMs; Punch = punch; }
+            public override string ToString() => (Ep is IPEndPoint ip ? NetAddr.Describe(ip.Address) + " port " + ip.Port : Ep?.ToString()) + (Punch ? " (needs let-in)" : "");
+        }
+        public const int CandidateAckMs = 4000, SteamAckMs = 15_000, PunchWaitMs = 180_000, PunchResendConnectMs = 30_000;
+
+        /// <summary>
+        /// Tries the targets in order: LAN first behind the same router, then Steam, then the public address. A target that
+        /// does not answer within its AckMs hands over to the next one. Returns null or the refusal text.
+        /// </summary>
+        public string Connect(IReadOnlyList<ConnectTarget> targets)
+        {
+            if (targets == null || targets.Count == 0) return "No address to connect to.";
+            _fallback.Clear();
+            var first = targets[0];
+            string r = CheckConnectable(first.Ep); if (r != null) return r;
+            r = StartTarget(first);
+            if (r == null) foreach (var t in targets.Skip(1)) _fallback.Enqueue(t);
+            return r;
+        }
+        /// <summary>Old entry point (manual IP, tests): one target with the full ack window.</summary>
+        public string Connect(IReadOnlyList<IPEndPoint> candidates) =>
+            Connect(candidates.Select((ep, i) => new ConnectTarget(ep, i == candidates.Count - 1 ? AckWithinMs : CandidateAckMs)).ToList());
+        readonly Queue<ConnectTarget> _fallback = new Queue<ConnectTarget>();
+        int _ackMs = AckWithinMs; bool _hostSpoke; long _lastConnectSent;
+        /// <summary>Guest is waiting for the host to paste its let-in code (UDP hole punching).</summary>
+        public bool PunchWaiting { get; private set; }
+        /// <summary>How the guest is reaching the host right now: "steam", "lan", "internet", "punch" (empty when offline).</summary>
+        public string Route { get; private set; } = "";
+        public static string RouteOf(ConnectTarget t) => t.Ep is SteamEndPoint ? "steam" : t.Punch ? "punch" : t.Ep is IPEndPoint ip && NetAddr.Kind(ip.Address) == "private" ? "lan" : "internet";
+        /// <summary>The code this guest must send to the host (null until STUN answered).</summary>
+        public string LetInCode { get; private set; }
+        public event Action<string> LetInCodeReady;
+        /// <summary>Finds the public endpoint of a guest socket (STUN). Null in tests: no let-in code.</summary>
+        public Func<IDatagramTransport, System.Threading.Tasks.Task<IPEndPoint>> DiscoverMapped;
+        /// <summary>Opens a guest transport for an endpoint kind (UDP by default; the game layer adds Steam).</summary>
+        public Func<EndPoint, IDatagramTransport> OpenFor;
+
+        string StartTarget(ConnectTarget target)
+        {
             IDatagramTransport t;
-            try { t = Open(ep.AddressFamily); }
+            try { t = OpenFor != null ? OpenFor(target.Ep) : Open(target.Ep.AddressFamily); }
             catch (Exception e) { return "Could not connect: " + e.Message; }
-            return ConnectVia(t, ep);
+            var r = ConnectVia(t, target.Ep);
+            if (r != null) return r;
+            _ackMs = target.Punch ? PunchWaitMs : target.AckMs; PunchWaiting = target.Punch; Route = RouteOf(target);
+            Log.Info("connecting via " + target);
+            if (target.Punch && DiscoverMapped != null)
+            {
+                int gen = _gen;
+                DiscoverMapped(t).ContinueWith(task =>
+                {
+                    var ep = task.IsCompletedSuccessfully ? task.Result : null;
+                    Node.Post(() =>
+                    {
+                        if (gen != _gen || !Connecting) return;
+                        if (ep == null || !NetAddr.IsPublic(ep.Address)) { Log.Warn("could not learn this PC's public port (STUN): no let-in code"); return; }
+                        LetInCode = JoinCode.EncodeLetIn(ep);
+                        Log.Info($"let-in code ready ({NetAddr.Describe(ep.Address)}, port {ep.Port})");
+                        try { LetInCodeReady?.Invoke(LetInCode); } catch (Exception e) { Log.Error("let-in subscriber", e); }
+                    });
+                });
+            }
+            return null;
         }
 
-        string CheckConnectable(IPEndPoint ep)
+        public string Connect(IPEndPoint ep) => Connect(new[] { new ConnectTarget(ep, AckWithinMs) });
+
+        string CheckConnectable(EndPoint target)
         {
-            if (IsHost) return "You are hosting a world; stop it before connecting.";
+            if (IsHost) return Text.StatusText.StopHostingFirst;
             if (Connected) return "Already connected.";
             if (Connecting) return "Already connecting.";
-            if (!DevMode && IPAddress.IsLoopback(ep.Address)) return "127.0.0.1 only works on the same machine setup used for development. Use the host's LAN IP instead (find it with ipconfig or on your router page).";
+            if (!DevMode && target is IPEndPoint ep && IPAddress.IsLoopback(ep.Address)) return "127.0.0.1 only works on the same machine setup used for development. Use the host's LAN IP instead (find it with ipconfig or on your router page).";
             return null;
         }
 
@@ -321,7 +404,7 @@ namespace Lycoreia
         public string ConnectVia(IDatagramTransport t, EndPoint hostEp)
         {
             if (BlockedReason != null) return BlockedReason;
-            if (IsHost) return "You are hosting a world; stop it before connecting.";
+            if (IsHost) return Text.StatusText.StopHostingFirst;
             if (Connecting || Connected) return "Already connecting or connected.";
             int gen = ++_gen; _errorShown = false; _faultScheduled = false; _timeoutPosted = false; _lossPosted = false;
             try
@@ -330,7 +413,14 @@ namespace Lycoreia
                 t.Faulted += OnFault;
                 Node.Attach(Role.Guest, t, LocalId);
                 var hp = Node.AddPeer(hostEp, true); hp.PlayerId = null; hp.Registered = true;
-                _connectAt = _clock(); _lastHb = _connectAt;
+                _connectAt = _clock(); _lastHb = _connectAt; _lastConnectSent = _connectAt; _hostSpoke = false; LetInCode = null; PunchWaiting = false; _ackMs = AckWithinMs;
+                if (hostEp is IPEndPoint target)
+                {
+                    // say what kind of address the guest dialled (masked); private/CGNAT targets cannot work over the internet.
+                    string kind = NetAddr.Kind(target.Address);
+                    Log.Info($"connecting to {NetAddr.Describe(target.Address)} port {target.Port}");
+                    if (kind == "cgnat") Log.Warn("the host address is a provider-internal (CGNAT) address: it cannot be reached over the internet");
+                }
                 Node.SendTo(hp, new Connect { PlayerId = LocalId, Name = LocalName, Build = Build });
                 return null;
             }
@@ -343,6 +433,7 @@ namespace Lycoreia
 
         void OnModSyncRequest(Ctx c, ModSyncRequest m)
         {
+            _hostSpoke = true;
             Node.SendToHost(new ModSyncReply { PlayerId = LocalId, Mods = Mods.LocalSharedList() });
         }
 
@@ -366,7 +457,8 @@ namespace Lycoreia
 
         void OnDeny(Ctx c, Deny m)
         {
-            string text = "Connection was denied! " + m.Reason;
+            _hostSpoke = true;
+            string text = Text.StatusText.Denied(m.Reason);
             ShowError(text); Reject();
             SafeInvoke(ClientDisconnected, text);
         }
@@ -376,7 +468,7 @@ namespace Lycoreia
         /// <summary>Reject path: bump generation, clear flags, stop reliability, close the socket, clear mod ids.</summary>
         public void Reject()
         {
-            _gen++; Connecting = false; Joined = false; _faultScheduled = false;
+            _gen++; Connecting = false; Joined = false; _faultScheduled = false; _fallback.Clear(); PunchWaiting = false;
             Players.Clear(); _colours.Clear(); Mods.ClearNetIds(); Node.Detach();
         }
 
@@ -385,7 +477,7 @@ namespace Lycoreia
         {
             if (!IsGuest) return;
             _gen++;
-            if (!_errorShown && reason == null) Notice?.Invoke("You disconnected from the world!");
+            if (!_errorShown && reason == null) Notice?.Invoke(Text.StatusText.YouDisconnected);
             else if (reason != null) { if (!_errorShown) ErrorShown?.Invoke(reason); }
             if (sendLeave) { try { Node.SendToHost(new PlayerLeave()); } catch { } }
             Connecting = false; Joined = false; Players.Clear(); _colours.Clear(); Mods.ClearNetIds(); Node.Detach();
@@ -398,7 +490,7 @@ namespace Lycoreia
             int n = (int)code;
             if (n == 10054)
             {
-                if (!_hintShown && IsGuest) { _hintShown = true; Notice?.Invoke("No server answered. If you connect over the internet, check that the host's tunnel or port forward is up and that the firewall allows UDP."); }
+                if (!_hintShown && IsGuest) { _hintShown = true; Log.Warn("the host's address answered 'port unreachable': nothing listens on that port or a firewall rejects it"); Node.Post(() => Notice?.Invoke(Text.StatusText.NoServerAnswered)); }
                 return;
             }
             if (n == 10004) return;
@@ -406,7 +498,7 @@ namespace Lycoreia
             if (IsGuest && !_faultScheduled)
             {
                 _faultScheduled = true; int gen = _gen;
-                Node.Post(() => { if (gen == _gen && IsGuest) { ShowError("Could not join the world, check the MelonLoader console for details"); Disconnect("Could not join the world, check the MelonLoader console for details", false); } });
+                Node.Post(() => { if (gen == _gen && IsGuest) { ShowError(Text.StatusText.CouldNotJoin); Disconnect(Text.StatusText.CouldNotJoin, false); } });
             }
         }
 
@@ -426,6 +518,12 @@ namespace Lycoreia
                         Node.SendTo(p, beat);
                     }
                 }
+                for (int i = _punches.Count - 1; i >= 0; i--)
+                {
+                    var pu = _punches[i];
+                    if (now > pu.until || Node.Peers.Any(p => p.Registered && p.EP.Equals(pu.ep))) { _punches.RemoveAt(i); continue; }
+                    if (now >= pu.next) { _punches[i] = (pu.ep, pu.until, now + PunchEveryMs); Node.Transport?.Send(pu.ep, PunchBytes, 0, PunchBytes.Length); }
+                }
                 for (int i = _closing.Count - 1; i >= 0; i--) if (now >= _closing[i].at) { var p = _closing[i].p; _closing.RemoveAt(i); Node.RemovePeer(p); p.Link.Reset(); }
                 foreach (var p in Node.Peers.ToList()) if (!p.Registered && now - p.LastHeardMs > 30_000 && !_closing.Any(x => x.p == p)) Node.RemovePeer(p);
             }
@@ -434,10 +532,33 @@ namespace Lycoreia
                 var hp = Node.HostPeer; if (hp == null) return;
                 if (!hp.Acknowledged)
                 {
-                    if (Connecting && !_timeoutPosted && now - _connectAt > AckWithinMs)
+                    if (Connecting && !_timeoutPosted && _fallback.Count > 0 && now - _connectAt > _ackMs)
                     {
                         int gen = _gen; _timeoutPosted = true;
-                        Node.Post(() => { if (gen == _gen && Connecting) { _timeoutPosted = false; const string t = "The host did not answer in time."; ShowError(t); Reject(); SafeInvoke(ClientDisconnected, t); } });
+                        Node.Post(() =>
+                        {
+                            _timeoutPosted = false;
+                            if (gen != _gen || !Connecting || _fallback.Count == 0) return;
+                            var next = _fallback.Dequeue(); var rest = _fallback.ToArray();
+                            Log.Info("no answer, trying the next way to reach the host");
+                            Reject();
+                            var err = StartTarget(next);
+                            if (err != null) { ShowError(err); SafeInvoke(ClientDisconnected, err); return; }
+                            foreach (var t in rest) _fallback.Enqueue(t);
+                        });
+                        return;
+                    }
+                    // Waiting to be let in: the first Connect gives up after Link.GiveUpMs; keep one in flight until the host answers.
+                    if (Connecting && PunchWaiting && !_hostSpoke && now - _lastConnectSent > PunchResendConnectMs)
+                    {
+                        // Fresh link epoch: the abandoned first Connect must not leave an ordering gap the host would wait 34 s on.
+                        _lastConnectSent = now; hp.Link.Reset();
+                        Node.SendTo(hp, new Connect { PlayerId = LocalId, Name = LocalName, Build = Build });
+                    }
+                    if (Connecting && !_timeoutPosted && now - _connectAt > _ackMs)
+                    {
+                        int gen = _gen; _timeoutPosted = true;
+                        Node.Post(() => { if (gen == _gen && Connecting) { _timeoutPosted = false; string t = PunchWaiting ? Text.StatusText.NotLetIn : Text.StatusText.NoAnswer; ShowError(t); Reject(); SafeInvoke(ClientDisconnected, t); } });
                     }
                     return;
                 }
@@ -445,7 +566,7 @@ namespace Lycoreia
                 if (now - hp.LastHeardMs > GuestLossMs && !_lossPosted)
                 {
                     int gen = _gen; _lossPosted = true;
-                    Node.Post(() => { _lossPosted = false; if (gen == _gen && IsGuest && _clock() - Node.HostPeer.LastHeardMs > GuestLossMs) { ShowError("Lost connection to the host."); Disconnect("Lost connection to the host.", false); } });
+                    Node.Post(() => { _lossPosted = false; if (gen == _gen && IsGuest && _clock() - Node.HostPeer.LastHeardMs > GuestLossMs) { ShowError(Text.StatusText.LostConnection); Disconnect(Text.StatusText.LostConnection, false); } });
                 }
             }
         }

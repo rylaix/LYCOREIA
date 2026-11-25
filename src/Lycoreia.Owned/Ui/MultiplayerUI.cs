@@ -38,11 +38,16 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
     // native menu state
     internal bool IsFirstTimeSetup => Lycoreia.Game.Prefs.Get<bool>(Settings.UiFirstRun);
     internal bool IsHostAutoInProgress { get; private set; }
-    internal string HostAutoStage { get; private set; } = "Starting server...";
+    internal string HostAutoStage { get; private set; } = string.Empty;
     private CancellationTokenSource? hostCancellation;
     private int hostAttempt;
     internal string HostAutoError { get; private set; } = string.Empty;
-    internal string HostJoinCode { get; private set; } = string.Empty;
+    internal string HostJoinCode => Mod.Advertiser.Code;
+    internal bool HostCodePending => Mod.Advertiser.Pending;
+    internal bool HostLetIn => Mod.Advertiser.LetIn;
+    internal bool HostViaSteam => Mod.Advertiser.ViaSteam;
+    /// <summary>Router setup failed but the world is open anyway (Steam / hole punching); the reason, shown as a warning.</summary>
+    internal string HostAutoWarning { get; private set; } = string.Empty;
     internal string NativeLastError { get; private set; } = string.Empty;
     internal string SavedJoinIp => Lycoreia.Game.Prefs.Get<string>(Settings.RecentIp);
     internal string SavedJoinPort => Lycoreia.Game.Prefs.Get<int>(Settings.RecentPort).ToString();
@@ -155,9 +160,20 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
         Mod.Session.ChatReceived += OnChat; Mod.Session.Notice += OnNotice; NativeToast.ChatFallback = t => AddSystem(t, SystemMessageNormal);
         Lycoreia.Text.CoopText.CanRender = lang => lang != "ru" || UiFonts.EnsureCyrillic();   // rc3: never draw Russian with a Latin-only font
         Mod.Session.ErrorShown += text => AddSystem(text, SystemMessageDisconnect);
-        Mod.Session.PlayerAdded += p => { if (!p.IsHost) AddSystem($"{p.Name} joined the world!", SystemMessageConnect); };
-        Mod.Session.PlayerRemoved += p => AddSystem($"{p.Name} left the world!", SystemMessageDisconnect);
-        AddSystem($"Welcome to {BuildInfo.Name} {BuildInfo.Version}! Press Enter to chat, F5 to hide the chat.", SystemMessageNormal);
+        Lycoreia.SteamNet.FriendStartedHosting += f =>
+        {
+            if (Mod.Session.Active) return;   // already playing together
+            NativeToast.Show(Lycoreia.Text.MenuText.FriendHostingToastTitle(f.Name), Lycoreia.Text.MenuText.FriendHostingToastBody, null, UiCue.Notify);
+        };
+        Mod.Session.LetInCodeReady += code =>
+        {
+            try { GUIUtility.systemCopyBuffer = code; } catch { }
+            AddSystem(Lycoreia.Text.MenuText.LetInChat(code), SystemMessageNormal);
+            Mod.Diagnostics?.Record("net", "let-in-code", "ready");
+        };
+        Mod.Session.PlayerAdded += p => { if (!p.IsHost) AddSystem(Lycoreia.Text.StatusText.PlayerJoined(p.Name), SystemMessageConnect); };
+        Mod.Session.PlayerRemoved += p => AddSystem(Lycoreia.Text.StatusText.PlayerLeft(p.Name), SystemMessageDisconnect);
+        AddSystem(Lycoreia.Text.StatusText.Welcome(BuildInfo.Name, BuildInfo.Version), SystemMessageNormal);
     }
 
     private void Update()
@@ -246,30 +262,43 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
     {
         NativeLastError = string.Empty;
         if (ushort.TryParse((portText ?? "").Trim(), out var p) && p != 0) return true;
-        NativeLastError = "The port must be a number from 1 to 65535."; return false;
+        NativeLastError = Lycoreia.Text.StatusText.PortRange; return false;
     }
 
     internal bool NativeValidateJoinCode(string code)
     {
         NativeLastError = string.Empty;
-        if (Lycoreia.AutoHost.TryDecodeJoinCode((code ?? "").Replace(" ", ""), out _, out _)) return true;
-        NativeLastError = "That join code is not valid."; return false;
+        if (Lycoreia.JoinCode.TryDecode(code ?? "", out _)) return true;
+        NativeLastError = Lycoreia.Text.StatusText.BadJoinCode; return false;
     }
 
     internal bool NativeValidateJoinManual(string ip, string portText)
     {
         ip = (ip ?? "").Trim(); portText = (portText ?? "").Trim(); NativeLastError = string.Empty;
-        if (ip.Length == 0) NativeLastError = "Enter the host's IP address.";
-        else if ((ip == "127.0.0.1" || ip == "::1") && !Mod.Session.DevMode) NativeLastError = "127.0.0.1 is not allowed. Use the host's LAN or public IP (PlayIt: the left-side address).";
-        else if (!ushort.TryParse(portText, out var port) || port == 0) NativeLastError = "The port must be a number from 1 to 65535.";
+        if (ip.Length == 0) NativeLastError = Lycoreia.Text.StatusText.EnterHostIp;
+        else if ((ip == "127.0.0.1" || ip == "::1") && !Mod.Session.DevMode) NativeLastError = Lycoreia.Text.StatusText.NoLoopback;
+        else if (!ushort.TryParse(portText, out var port) || port == 0) NativeLastError = Lycoreia.Text.StatusText.PortRange;
         return NativeLastError.Length == 0;
     }
 
     internal void NativeJoinWithCode(string code)
     {
         if (!NativeValidateJoinCode(code)) return;
-        Lycoreia.AutoHost.TryDecodeJoinCode((code ?? "").Replace(" ", ""), out var ip, out var port);
-        Join(new IPEndPoint(ip!, port));
+        Lycoreia.JoinCode.TryDecode(code ?? "", out var info);
+        var targets = new List<Lycoreia.Session.ConnectTarget>();
+        // behind the same router the public address needs NAT hairpinning, which most home routers do not do for UDP.
+        bool sameNetwork = info!.Lan != null && Lycoreia.NetAddr.OnLocalSubnet(info.Lan.Address);
+        if (sameNetwork) targets.Add(new(info.Lan!, Lycoreia.Session.CandidateAckMs));
+        bool steam = info.SteamId != 0 && Lycoreia.SteamNet.Ready && info.SteamId != Lycoreia.SteamNet.LocalId;
+        if (steam) targets.Add(new(new Lycoreia.SteamEndPoint(info.SteamId), Lycoreia.Session.SteamAckMs));
+        if (info.Public != null) targets.Add(new(info.Public, Lycoreia.Session.AckWithinMs, punch: info.LetIn));
+        Mod.Diagnostics?.Record("net", "join-code", $"lan-in-code={info.Lan != null}; same-network={sameNetwork}; steam-in-code={info.SteamId != 0}; steam-here={Lycoreia.SteamNet.Ready}; public={info.Public != null}; let-in={info.LetIn}; targets={targets.Count}");
+        if (targets.Count == 0)
+        {
+            NativeLastError = info.SteamId != 0 ? Lycoreia.Text.MenuText.NeedsSteam : Lycoreia.Text.StatusText.BadJoinCode;
+            return;
+        }
+        var err = Mod.Session.Connect(targets); NativeLastError = err ?? string.Empty;
     }
 
     internal void NativeJoinManual(string ip, string portText)
@@ -288,6 +317,25 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
         if (IsHostAutoInProgress) NativeCancelAutomatic();
         Lycoreia.Game.Prefs.Set(Settings.HostPort, (int)port);
         var err = Mod.Session.StartServer(port, ipv6: true); NativeLastError = err ?? string.Empty;
+        if (err == null) BeginAdvertising(null, port);
+    }
+
+    [HideFromIl2Cpp]
+    private void BeginAdvertising(Lycoreia.AutoHost? upnp, int port)
+    {
+        HostAutoWarning = string.Empty;
+        ulong steamId = Mod.Node.Transport is Lycoreia.CompositeTransport ? Lycoreia.SteamNet.LocalId : 0;
+        var lan = upnp?.LanIp ?? Lycoreia.HostAddress.PrimaryLan();
+        Mod.Advertiser.Begin(upnp, Mod.HostUdp, port, steamId, lan);
+        if (steamId != 0) AddSystem(Lycoreia.Text.MenuText.SteamHostChat, SystemMessageNormal);
+    }
+
+    /// <summary>Host: paste a guest's let-in code (hole punching).</summary>
+    internal void NativeLetIn(string code)
+    {
+        var err = Mod.Session.LetIn((code ?? "").Trim());
+        NativeLastError = err ?? string.Empty;
+        Mod.Diagnostics?.Record("net", "let-in", err == null ? "started" : "invalid");
     }
 
     internal void NativeCancelAutomatic()
@@ -296,20 +344,20 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
         hostAttempt++; hostCancellation?.Cancel();
         hostCancellation = null;
         IsHostAutoInProgress = false;
-        HostAutoError = "Automatic setup cancelled. You can retry or host on a port.";
+        HostAutoError = Lycoreia.Text.StatusText.AutoCancelled;
     }
 
     internal void NativeHostAutomatic()
     {
         if (IsHostAutoInProgress) return;
         IsHostAutoInProgress = true; HostAutoError = string.Empty;
-        HostAutoStage = "Finding public address...";
+        HostAutoStage = Lycoreia.Text.StatusText.Stage("Finding public address") + "...";
         int attempt = ++hostAttempt;
         var cancellation = hostCancellation = new CancellationTokenSource(AutoHost.SetupTimeout);
         Mod.AutoHost.StageChanged = text =>
         {
             Mod.Diagnostics?.Record("hosting", "auto-stage", text);
-            Mod.Node.Post(() => { if (hostAttempt == attempt) HostAutoStage = text + "..."; });
+            Mod.Node.Post(() => { if (hostAttempt == attempt) HostAutoStage = Lycoreia.Text.StatusText.Stage(text) + "..."; });
         };
         _ = CompleteAutomatic(Task.Run(() => Mod.AutoHost.PrepareAsync(cancellation.Token)), attempt, cancellation);
     }
@@ -327,25 +375,38 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
                 {
                     var err = Mod.Session.StartServer(port, ipv6: true);
                     if (err != null) HostAutoError = err;
-                    else HostJoinCode = Mod.AutoHost.JoinCode ?? string.Empty;
+                    else BeginAdvertising(Mod.AutoHost, port);
                     Mod.Diagnostics?.Record("hosting", "auto-complete", $"started={err == null}; error={err}");
+                    Mod.Diagnostics?.Record("hosting", "auto-reachability", Mod.AutoHost.Summary);
                 }
-                catch (Exception e) { HostAutoError = "Starting the server failed: " + e.Message; }
+                catch (Exception e) { HostAutoError = Lycoreia.Text.StatusText.ServerStartFailed(e.Message); }
                 finally { IsHostAutoInProgress = false; if (hostCancellation == cancellation) hostCancellation = null; cancellation.Dispose(); }
             });
         }
         catch (Exception e)
         {
             cancellation.Cancel();
-            string error = e is OperationCanceledException || e is TimeoutException
-                ? "Automatic setup timed out. Retry, or host on a forwarded port."
-                : e is AutoHostException ? e.Message : "Automatic hosting failed: " + e.Message;
+            string english = e is AutoHostException ? e.Message : e.Message;
             Mod.Node.Post(() =>
             {
+                // worded here, on the main thread: the language lookup must not run on the setup thread
+                string error = e is OperationCanceledException || e is TimeoutException ? Lycoreia.Text.StatusText.AutoTimedOut
+                    : e is AutoHostException ah ? Lycoreia.Text.StatusText.AutoHost(ah.Kind, ah.Detail) : Lycoreia.Text.StatusText.AutoFailed(english);
                 if (hostAttempt != attempt) { cancellation.Dispose(); return; }
                 if (hostCancellation == cancellation) hostCancellation = null;
-                HostAutoError = error; IsHostAutoInProgress = false; cancellation.Dispose();
+                IsHostAutoInProgress = false; cancellation.Dispose();
                 Mod.Diagnostics?.Record("hosting", "auto-failed", error);
+                // 2026-11-23: no usable router is no longer the end: open the world anyway; Steam friends and hole punching still work.
+                string? fallbackErr = null;
+                for (int i = 0; i < 5; i++)
+                {
+                    int port = System.Random.Shared.Next(Lycoreia.AutoHost.MinPort, Lycoreia.AutoHost.MaxPort + 1);
+                    fallbackErr = Mod.Session.StartServer(port, ipv6: true);
+                    if (fallbackErr == null) { BeginAdvertising(null, port); HostAutoWarning = Lycoreia.Text.MenuText.RouterFailedButOpen(error); break; }
+                    if (Mod.Session.IsHost || Mod.Session.IsGuest) break;
+                }
+                if (fallbackErr != null) HostAutoError = error;
+                Mod.Diagnostics?.Record("hosting", "auto-fallback", $"started={fallbackErr == null}; error={fallbackErr}");
             });
         }
     }
@@ -353,9 +414,9 @@ internal sealed partial class MultiplayerUI : MonoBehaviour
     internal void NativeSaveSettings(string username, string color, bool allowCheats, bool disableAchievements)
     {
         NativeLastError = string.Empty; username = (username ?? "").Trim();
-        if (username.Length == 0) { NativeLastError = "Enter a name."; return; }
-        if (username.Length > 24) { NativeLastError = "The name can be at most 24 characters."; return; }
-        if (!Regex.IsMatch(color ?? "", "^#?[0-9A-Fa-f]{6}$")) { NativeLastError = "The colour must be a hex value like #4D95CB."; return; }
+        if (username.Length == 0) { NativeLastError = Lycoreia.Text.StatusText.EnterName; return; }
+        if (username.Length > 24) { NativeLastError = Lycoreia.Text.StatusText.NameTooLong; return; }
+        if (!Regex.IsMatch(color ?? "", "^#?[0-9A-Fa-f]{6}$")) { NativeLastError = Lycoreia.Text.StatusText.BadColour; return; }
         Lycoreia.Game.Prefs.Set(Settings.Username, username); Lycoreia.Game.Prefs.Set(Settings.UsernameColor, color!.StartsWith("#") ? color : "#" + color);
         Lycoreia.Game.Prefs.Set(Settings.AllowCheats, allowCheats); Lycoreia.Game.Prefs.Set(Settings.DisableAchievements, disableAchievements); Lycoreia.Game.Prefs.Set(Settings.UiFirstRun, false);
         Mod.Session.LocalName = username; Mod.Session.AllowCheats = allowCheats;

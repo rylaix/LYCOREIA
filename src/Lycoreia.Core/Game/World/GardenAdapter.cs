@@ -138,7 +138,7 @@ namespace Lycoreia.Game.World
         void PublishLocal(string id, int type) { _publishing = true; try { Gardens.LocalCrop(id, id, type); } finally { _publishing = false; } }
         readonly GardenPending _pending = new GardenPending();
         static string CropName(int t) => t > 0 && ActorTypes.TryGetType(t, out var c) && c != null ? $"{c.name} (type {t})" : t.ToString();
-        /// <summary>Garden sync event at info level plus a diagnostics record (issue6: nothing about crops was logged).</summary>
+        /// <summary>Garden sync event at info level plus a diagnostics record (nothing about crops was logged).</summary>
         static void GardenLog(string kind, string plotId, string what) { Log.Info($"garden {plotId}: {kind}: {what}"); Mod.Diagnostics?.Record("world", kind, $"plot={plotId}; {what}"); }
         /// <summary>Crop state from the revision stream (a received message, a snapshot entry or our own local plant).</summary>
         void OnCropState(string plotId, int type)
@@ -157,7 +157,7 @@ namespace Lycoreia.Game.World
                 {
                     if (plot == null)
                     {
-                        // The plot object is inactive or not built on this seat (ranch region hibernating, issue6): keep the host's truth in the model
+                        // The plot object is inactive or not built on this seat (ranch region hibernating): keep the host's truth in the model
                         // AND remember it, the plot is not rebuilt from the model on wake when it already exists, so the pump plants it then.
                         var grower = crop != null ? GrowerFor(crop) : null; m.resourceGrowerDefinition = grower;
                         if (!_pending.Has(plotId)) _pending.Add(plotId);
@@ -171,7 +171,7 @@ namespace Lycoreia.Game.World
                     {
                         GardenLog("garden-applied", plotId, current != null ? $"replacing {current.name}" : "clearing an attached object");
                         // The catcher rejects an occupied plot, and Unity destroys the old crop only at the end of the frame: planting in
-                        // this frame produced nothing and was never retried (issue 2026-11-09). Clear now, plant on a later frame.
+                        // this frame produced nothing and was never retried. Clear now, plant on a later frame.
                         plot.DestroyAttached();
                         if (crop != null) DeferCrop(plotId);
                         return;
@@ -224,7 +224,7 @@ namespace Lycoreia.Game.World
             Log.Info($"land plots snapshot sent: {DescribePlots(msg)}");
             return msg;
         }
-        /// <summary>Plot sync events at info level (rare: purchases, upgrades, joins), issue4 "paddocks do not sync" had no evidence at all.</summary>
+        /// <summary>Plot sync events at info level (rare: purchases, upgrades, joins), "paddocks do not sync" had no evidence at all.</summary>
         static void PlotLog(string plotId, string what)
         {
             Log.Info($"plot {plotId}: {what}");

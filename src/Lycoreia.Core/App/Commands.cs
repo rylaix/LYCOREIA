@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Rylaix and Kum1te. All rights reserved.
 // Lycoreia Source-Available License 1.0 - see LICENSE. Copying, redistribution and derivative works are prohibited.
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Lycoreia.Snapshot;
 
@@ -30,6 +31,8 @@ namespace Lycoreia
     public static class CommandRouter
     {
         public const string SlashHint = "Commands: /cleanup, /cleanup now";
+        /// <summary>Extra slash commands of the game layer (test-only tools): name -> handler(args) returning the reply.</summary>
+        public static readonly Dictionary<string, Func<string, string>> Extra = new Dictionary<string, Func<string, string>>(StringComparer.OrdinalIgnoreCase);
 
         public static string Run(ICommandEnv env, string line)
         {
@@ -76,7 +79,9 @@ namespace Lycoreia
             if (input.StartsWith("/"))
             {
                 var cmd = input.Substring(1).Trim().ToLowerInvariant();
+                var word = cmd.Split(new[] { ' ' }, 2)[0];
                 if (cmd == "cleanup" || cmd == "cleanup now") reply(env.Session.IsHost ? env.Cleanup(cmd.EndsWith("now")) : "Only the host can run /cleanup.");
+                else if (Extra.TryGetValue(word, out var h)) reply(h(input.Substring(1).Trim().Substring(word.Length).Trim()));
                 else reply($"Unknown command {input.Split(' ')[0]}. {SlashHint}");
                 return true;
             }

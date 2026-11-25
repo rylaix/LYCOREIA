@@ -21,15 +21,17 @@ namespace Lycoreia.Tests
                 T.Eq("en", CoopText.Normalize(""), "empty"); T.Eq("en", CoopText.Normalize(null), "null"); T.Eq("de", CoopText.Normalize("de-DE"), "de-DE");
                 T.Eq("en", CoopText.Normalize("English (United States)"), "English");
             });
-            T.Test("coop text/pickfor: ru only when the language is ru and the text exists", () =>
+            T.Test("coop text/pickfor: ru and es only for their language and when the text exists", () =>
             {
-                T.Eq("привет", CoopText.PickFor("ru", "hi", "привет"), "ru"); T.Eq("hi", CoopText.PickFor("ru", "hi", ""), "empty ru falls back");
-                T.Eq("hi", CoopText.PickFor("ru", "hi", null), "null ru falls back"); T.Eq("hi", CoopText.PickFor("en", "hi", "привет"), "en");
-                T.Eq("hi", CoopText.PickFor("de", "hi", "привет"), "other language");
+                T.Eq("привет", CoopText.PickFor("ru", "hi", "привет", "hola"), "ru"); T.Eq("hi", CoopText.PickFor("ru", "hi", "", "hola"), "empty ru falls back");
+                T.Eq("hi", CoopText.PickFor("ru", "hi", null, "hola"), "null ru falls back"); T.Eq("hi", CoopText.PickFor("en", "hi", "привет", "hola"), "en");
+                T.Eq("hola", CoopText.PickFor("es", "hi", "привет", "hola"), "es"); T.Eq("hi", CoopText.PickFor("es", "hi", "привет", ""), "empty es falls back");
+                T.Eq("hi", CoopText.PickFor("de", "hi", "привет", "hola"), "other language");
+                T.Eq("es", CoopText.Normalize("es-419"), "es-419"); T.Eq("es", CoopText.Normalize("es-ES"), "es-ES");
             });
             T.Test("coop text/pick: follows the forced test language", () =>
             {
-                try { CoopText.SetLangForTests("ru"); T.Eq("да", CoopText.Pick("yes", "да"), "ru"); T.Eq("ru", CoopText.Lang, "lang"); CoopText.SetLangForTests("en"); T.Eq("yes", CoopText.Pick("yes", "да"), "en"); }
+                try { CoopText.SetLangForTests("ru"); T.Eq("да", CoopText.Pick("yes", "да", "sí"), "ru"); T.Eq("ru", CoopText.Lang, "lang"); CoopText.SetLangForTests("en"); T.Eq("yes", CoopText.Pick("yes", "да", "sí"), "en"); CoopText.SetLangForTests("es"); T.Eq("sí", CoopText.Pick("yes", "да", "sí"), "es"); }
                 finally { CoopText.SetLangForTests(null); }
             });
             T.Test("coop text/pick: English when the language's script cannot be drawn (rc3 blank-glyph bug)", () =>
@@ -37,9 +39,9 @@ namespace Lycoreia.Tests
                 try
                 {
                     CoopText.SetLangForTests("ru");
-                    CoopText.CanRender = l => false; T.Eq("yes", CoopText.Pick("yes", "да"), "no cyrillic font -> en"); T.Eq("en", CoopText.RenderLang(), "render lang");
-                    CoopText.CanRender = l => throw new System.Exception("x"); T.Eq("yes", CoopText.Pick("yes", "да"), "hook throws -> en");
-                    CoopText.CanRender = l => true; T.Eq("да", CoopText.Pick("yes", "да"), "font ok -> ru");
+                    CoopText.CanRender = l => false; T.Eq("yes", CoopText.Pick("yes", "да", "sí"), "no cyrillic font -> en"); T.Eq("en", CoopText.RenderLang(), "render lang");
+                    CoopText.CanRender = l => throw new System.Exception("x"); T.Eq("yes", CoopText.Pick("yes", "да", "sí"), "hook throws -> en");
+                    CoopText.CanRender = l => true; T.Eq("да", CoopText.Pick("yes", "да", "sí"), "font ok -> ru");
                 }
                 finally { CoopText.CanRender = null; CoopText.SetLangForTests(null); }
             });

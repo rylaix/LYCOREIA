@@ -36,6 +36,19 @@ namespace Lycoreia.Tests
                 T.Eq(UpdateKind.Unknown, UpdateCheck.Evaluate("2.0.1", new List<PublishedVersion> { G(null), N(null) }).Kind, "offline: say nothing");
                 T.Eq(UpdateKind.UpdateAvailable, UpdateCheck.Evaluate("2.0.1-dev", new List<PublishedVersion> { G("2.0.2") }).Kind, "pre-release suffix ignored");
             });
+
+            T.Test("update check: release candidates and hotfixes are ordered (rc1 said UpToDate with rc4 public)", () =>
+            {
+                T.True(VersionCheck.Compare("2.1.0-rc1", "2.1.0-rc4") < 0); T.True(VersionCheck.Compare("2.1.0-rc4", "2.1.0-rc4.1") < 0);
+                T.True(VersionCheck.Compare("2.1.0-rc9", "2.1.0-rc10") < 0, "numbers, not text"); T.True(VersionCheck.Compare("2.1.0-rc4.1", "2.1.0") < 0);
+                T.True(VersionCheck.Compare("2.1.0", "2.1.0-rc4.1") > 0); T.Eq(0, VersionCheck.Compare("v2.1.0-rc4", "2.1.0-rc4")); T.True(VersionCheck.Compare("2.1.0", "2.0.9") > 0);
+                T.Eq(ModVersionVerdict.Outdated, VersionCheck.CheckMod("2.1.0-rc1", "2.1.0-rc4"));
+                T.Eq(ModVersionVerdict.Outdated, VersionCheck.CheckMod("2.1.0-rc4", "2.1.0-rc4.1"));
+                T.Eq(ModVersionVerdict.UpToDate, VersionCheck.CheckMod("2.1.0-rc4.1", "2.1.0-rc4.1"));
+                var up = UpdateCheck.Evaluate("2.1.0-rc1", new List<PublishedVersion> { G("2.1.0-rc4.1"), N("2.1.0-rc4") });
+                T.Eq(UpdateKind.UpdateAvailable, up.Kind); T.Eq("2.1.0-rc4.1", up.Newest); T.Eq(1, up.Offering.Count); T.Eq("GitHub", up.Offering[0].Source);
+                T.Eq(UpdateKind.AheadOfPublic, UpdateCheck.Evaluate("2.1.0-rc4.1", new List<PublishedVersion> { G("2.1.0-rc4") }).Kind);
+            });
         }
     }
 }

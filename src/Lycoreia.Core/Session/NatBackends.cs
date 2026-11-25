@@ -9,13 +9,20 @@ namespace Lycoreia
     public sealed class NetshFirewall : IFirewall
     {
         static string Rule(int port) => "Lycoreia UDP " + port;
-        public void Allow(int port) => Run($"advfirewall firewall add rule name=\"{Rule(port)}\" dir=in action=allow protocol=UDP localport={port}");
-        public void Remove(int port) => Run($"advfirewall firewall delete rule name=\"{Rule(port)}\"");
-        static void Run(string args)
+        /// <summary>Throws when netsh refuses (it needs administrator rights, which the game normally does not have).</summary>
+        public void Allow(int port)
         {
-            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            int code = Run($"advfirewall firewall add rule name=\"{Rule(port)}\" dir=in action=allow protocol=UDP localport={port}");
+            if (code != 0) throw new InvalidOperationException("netsh exit code " + code + (code == 1 ? " (administrator rights needed)" : ""));
+        }
+        public void Remove(int port) => Run($"advfirewall firewall delete rule name=\"{Rule(port)}\"");
+        static int Run(string args)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return 0;
             using var p = Process.Start(new ProcessStartInfo("netsh", args) { CreateNoWindow = true, UseShellExecute = false });
-            p?.WaitForExit(5000);
+            if (p == null) return -1;
+            if (!p.WaitForExit(5000)) return -2;
+            return p.ExitCode;
         }
     }
 }

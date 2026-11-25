@@ -39,7 +39,7 @@ namespace Lycoreia.Game.Coop
 
     static partial class CoopWorld
     {
-        static GameObject _hudRoot; static RectTransform _panel, _fill; static TextMeshProUGUI _title, _clock, _goal;
+        static GameObject _hudRoot; static RectTransform _panel, _fill; static TextMeshProUGUI _title, _count, _clock, _goal;
         static UnityEngine.UI.Image _fillImg; static UiFade _fade; static bool _shown;
         static long _evKey = -1; static ExpeditionOutcome _evOutcome; static int _evProgress; static bool _evSawRunning; static int _pulse;
         static bool _hudGateLogged; static string _lastGate; static int _gateLogs;
@@ -60,10 +60,12 @@ namespace Lycoreia.Game.Coop
                 EnsurePanel(); if (_panel == null) return;
                 bool running = run.Outcome == ExpeditionOutcome.Running; long left = Math.Max(0, run.EndsUtc - utc);
                 bool urgent = TrackerMath.Urgent(running, utc, run.StartedUtc, run.EndsUtc);
-                _title.text = "<b>" + def.Name + "</b>  " + run.Progress + "/" + run.Target;
+                // name and goal in the player's language (the menu already did this), goal and clock on their own lines.
+                SetText(_title, "<b>" + MenuText.ExpName(def) + "</b>");
+                SetText(_count, run.Progress + "/" + run.Target);
                 string clock = run.Outcome switch { ExpeditionOutcome.Succeeded => CoopWorldText.Complete, ExpeditionOutcome.Failed => CoopWorldText.TimeUp, _ => CoopWorldText.Left(TrackerMath.Clock(left)) };
-                _clock.text = clock; _clock.color = run.Outcome == ExpeditionOutcome.Succeeded ? Good : (urgent || run.Outcome == ExpeditionOutcome.Failed) ? Bad : new Color(1f, 0.97f, 0.88f);
-                _goal.text = def.Goal;
+                SetText(_clock, clock); _clock.color = run.Outcome == ExpeditionOutcome.Succeeded ? Good : (urgent || run.Outcome == ExpeditionOutcome.Failed) ? Bad : new Color(1f, 0.97f, 0.88f, 0.9f);
+                SetText(_goal, MenuText.ExpGoal(def));
                 float f = TrackerMath.Progress(run.Progress, run.Target); _fill.anchorMax = new Vector2(f, 1f);
                 _fillImg.color = run.Outcome == ExpeditionOutcome.Succeeded ? Good : (urgent || run.Outcome == ExpeditionOutcome.Failed) ? Bad : Accent;
                 SetShown(true);
@@ -104,6 +106,8 @@ namespace Lycoreia.Game.Coop
             if (tag != null && state != null) { try { tagSet = state.HasStateTag(tag.Cast<IHudStateTag>()); } catch { tagSet = false; } if (tagSet) why = "hide-HUD tag '" + tag.Identifier + "'"; }
         }
 
+        static void SetText(TextMeshProUGUI t, string s) { if (t != null && t.text != s) t.text = s; }
+
         static void SetShown(bool on)
         {
             if (on == _shown) return;
@@ -141,16 +145,21 @@ namespace Lycoreia.Game.Coop
             {
                 _hudRoot = new GameObject("Lycoreia.ExpeditionHud"); UnityEngine.Object.DontDestroyOnLoad(_hudRoot);
                 var canvas = _hudRoot.AddComponent<Canvas>(); canvas.renderMode = RenderMode.ScreenSpaceOverlay; canvas.sortingOrder = 50;
-                var scaler = _hudRoot.AddComponent<UnityEngine.UI.CanvasScaler>(); scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize; scaler.referenceResolution = new Vector2(1920, 1080);
-                var bg = Rect("Panel", _hudRoot.transform, new Color(0.09f, 0.07f, 0.15f, 0.84f)); _panel = bg.rectTransform;
-                _panel.anchorMin = _panel.anchorMax = _panel.pivot = new Vector2(0.5f, 1f); _panel.anchoredPosition = new Vector2(0, -96); _panel.sizeDelta = new Vector2(560, 90);
+                // smaller and in the upper-left corner (was 560x100 at the top centre, scaled by screen width). Every text box is at least
+                // 1.6x its font size tall: TMP's Ellipsis mode hides a line that does not fit vertically, and the Cyrillic fallback font has taller
+                // lines than Lexend, so the Russian goal and clock lines used to vanish.
+                var scaler = _hudRoot.AddComponent<UnityEngine.UI.CanvasScaler>(); scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize; scaler.referenceResolution = new Vector2(1920, 1080); scaler.matchWidthOrHeight = 1f;
+                var bg = Rect("Panel", _hudRoot.transform, Color.white); _panel = bg.rectTransform;
+                _panel.anchorMin = _panel.anchorMax = _panel.pivot = new Vector2(0f, 1f); _panel.anchoredPosition = new Vector2(24, -24); _panel.sizeDelta = new Vector2(380, 112); UiPlates.Apply(bg, PlateKind.Card, height: 112f);
                 _fade = UiFade.Ensure(_panel.gameObject);
-                var edge = Rect("Edge", _panel, Accent); var er = edge.rectTransform; er.anchorMin = new Vector2(0, 0); er.anchorMax = new Vector2(0, 1); er.pivot = new Vector2(0, 0.5f); er.sizeDelta = new Vector2(5, 0); er.anchoredPosition = Vector2.zero;
-                _title = Txt("Title", _panel, 26, TextAlignmentOptions.Left, new Color(1f, 0.97f, 0.88f)); Box(_title.rectTransform, 0f, 0.6f, 4, 38, 16, 0);
-                _clock = Txt("Clock", _panel, 26, TextAlignmentOptions.Right, new Color(1f, 0.97f, 0.88f)); Box(_clock.rectTransform, 0.6f, 1f, 4, 38, 0, 14);
-                var track = Rect("Track", _panel, new Color(1f, 1f, 1f, 0.14f)); Box(track.rectTransform, 0f, 1f, 44, 56, 16, 14);
-                _fillImg = Rect("Fill", track.transform, Accent); _fill = _fillImg.rectTransform; _fill.anchorMin = Vector2.zero; _fill.anchorMax = new Vector2(0, 1); _fill.offsetMin = _fill.offsetMax = Vector2.zero;
-                _goal = Txt("Goal", _panel, 20, TextAlignmentOptions.Left, new Color(1f, 0.97f, 0.88f, 0.72f)); Box(_goal.rectTransform, 0f, 1f, 60, 86, 16, 14);
+                var edge = Rect("Edge", _panel, Accent); var er = edge.rectTransform; er.anchorMin = new Vector2(0, 0); er.anchorMax = new Vector2(0, 1); er.pivot = new Vector2(0, 0.5f); er.sizeDelta = new Vector2(4, -24); er.anchoredPosition = new Vector2(8, 0); edge.sprite = UiSprites.Rounded(2); edge.type = UnityEngine.UI.Image.Type.Sliced;
+                var cream = new Color(1f, 0.97f, 0.88f);
+                _title = Txt("Title", _panel, 19, TextAlignmentOptions.Left, cream); Box(_title.rectTransform, 0f, 0.72f, 7, 37, 20, 0);
+                _count = Txt("Count", _panel, 19, TextAlignmentOptions.Right, cream); Box(_count.rectTransform, 0.72f, 1f, 7, 37, 0, 14);
+                var track = Rect("Track", _panel, new Color(1f, 1f, 1f, 0.14f)); Box(track.rectTransform, 0f, 1f, 40, 48, 20, 14); track.sprite = UiSprites.Rounded(4); track.type = UnityEngine.UI.Image.Type.Sliced;
+                _fillImg = Rect("Fill", track.transform, Accent); _fillImg.sprite = UiSprites.Rounded(4); _fillImg.type = UnityEngine.UI.Image.Type.Sliced; _fill = _fillImg.rectTransform; _fill.anchorMin = Vector2.zero; _fill.anchorMax = new Vector2(0, 1); _fill.offsetMin = _fill.offsetMax = Vector2.zero;
+                _goal = Txt("Goal", _panel, 15, TextAlignmentOptions.Left, new Color(1f, 0.97f, 0.88f, 0.78f)); Box(_goal.rectTransform, 0f, 1f, 52, 80, 20, 14);
+                _clock = Txt("Clock", _panel, 15, TextAlignmentOptions.Left, cream); Box(_clock.rectTransform, 0f, 1f, 80, 106, 20, 14);
                 _fade.Play(_panel, 0f, 1f, 0.01f, false);   // start transparent until SetShown fades it in
                 Log.Info("expedition HUD panel built (native HUD gate: HudUI active + hide-HUD state tag)");
             }

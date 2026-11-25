@@ -55,6 +55,7 @@ internal static class CoopWheel
     private static Image? chargeRing;
     private static UiFade? fade;
     private static TextMeshProUGUI? center, prompt;
+    private static Image? centerPlate, promptPlate;
     private static readonly List<WedgeView> wedges = new();
 
     // text box
@@ -157,6 +158,7 @@ internal static class CoopWheel
         aim = Vector2.zero; selected = -1; open = true;
         InputGate.Set("coop-wheel", true);                                                   // camera look and other keys stop while choosing
         heldGlyph = dev == 1 ? InputGlyphs.Label(CoopWheelPad.Path ?? "") : InputGlyphs.Label("MMB");
+        if (root) root!.SetActive(true);                                                 // texts measured in Build/Paint must be active (TMP preferred size)
         Build(); Paint(); root!.SetActive(true);
         try { fade?.Play(panel!.transform, 1f, 1f, 0.14f, false, null, 0f, 0.82f); } catch { }
         UiFx.Play(UiCue.Open);
@@ -232,7 +234,9 @@ internal static class CoopWheel
             fade = UiFade.Ensure(root);
             var back = NewImage("Backdrop", panel.transform, Vector2.zero, new Vector2(BackdropSize, BackdropSize * 0.72f), Backdrop());   // dark soft vignette: text stays readable on any scene
             back.color = Color.white;
-            center = Text(panel.transform, Vector2.zero, new Vector2(300, 170), 26f, FontStyles.Bold);
+            centerPlate = NewImage("Plate", panel.transform, Vector2.zero, new Vector2(300, 170), null); UiPlates.Apply(centerPlate, PlateKind.Card, null, true, true, 100f);
+            center = Text(panel.transform, Vector2.zero, new Vector2(CenterTextW, 170), 26f, FontStyles.Bold);
+            promptPlate = NewImage("Plate", panel.transform, new Vector2(0, -(Outer + 110f)), new Vector2(400, 40), null); UiPlates.Apply(promptPlate, PlateKind.Pill, null, true, true, 36f);
             prompt = Text(panel.transform, new Vector2(0, -(Outer + 110f)), new Vector2(900, 44), 20f, FontStyles.Normal);
         }
         foreach (var w in wedges) if (w.go) UnityEngine.Object.Destroy(w.go);
@@ -258,10 +262,40 @@ internal static class CoopWheel
             lrt.pivot = new Vector2(side > 0 ? 0f : side < 0 ? 1f : 0.5f, side != 0 ? 0.5f : (ly >= 0 ? 0f : 1f));
             v.label.alignment = side > 0 ? TextAlignmentOptions.MidlineLeft : side < 0 ? TextAlignmentOptions.MidlineRight : (ly >= 0 ? TextAlignmentOptions.Bottom : TextAlignmentOptions.Top);
             v.label.text = WheelText.Label(options[i].Label); v.label.enableAutoSizing = true; v.label.fontSizeMin = 14f; v.label.fontSizeMax = 20f; v.label.textWrappingMode = TextWrappingModes.Normal;
+            PlateLabel(v, side, lx, ly);
             try { v.hover = UiHover.Ensure(v.go, WedgeHoverScale); v.hover.enabled = false; } catch { }
             wedges.Add(v);
         }
         prompt!.text = dev == 1 ? WheelText.PadReleaseHint(heldGlyph) : WheelText.ReleaseHint(heldGlyph);
+        FitPlate(promptPlate, prompt, PlateKind.Pill, 900f, 0f);
+    }
+
+    /// <summary>Resizes a plate to wrap the text's preferred size (token padding); hides it for empty text.</summary>
+    /// <summary>Centre caption width: the card (text + padding) stays inside the ring hole (inner radius Outer * RingInnerRatio).</summary>
+    private const float CenterTextW = 230f;
+
+    private static void FitPlate(Image? plate, TextMeshProUGUI? text, PlateKind kind, float maxWidth, float yOffset)
+    {
+        if (!plate || !text) return;
+        bool has = !string.IsNullOrEmpty(text!.text); plate!.gameObject.SetActive(has); if (!has) return;
+        var pref = text.GetPreferredValues(text.text, maxWidth, 0f);
+        plate.rectTransform.sizeDelta = UiPlates.Wrap(new Vector2(Mathf.Min(Mathf.Ceil(pref.x), maxWidth), Mathf.Ceil(pref.y)), kind);
+        plate.rectTransform.anchoredPosition = text.rectTransform.anchoredPosition + new Vector2(0f, yOffset);
+    }
+
+    /// <summary>Pill plate behind a wedge label: the label rect shrinks to its text and moves in by the pill padding, so the plate starts where the label used to.</summary>
+    private static void PlateLabel(WedgeView v, int side, float lx, float ly)
+    {
+        var lrt = v.label.rectTransform;
+        var pref = v.label.GetPreferredValues(v.label.text, LabelW, 0f);
+        float tw = Mathf.Min(Mathf.Ceil(pref.x) + 2f, LabelW), th = Mathf.Min(Mathf.Ceil(pref.y), LabelH);
+        var size = UiPlates.Wrap(new Vector2(tw, th), PlateKind.Pill); var pad = UiPlates.PaddingOf(PlateKind.Pill);
+        var plate = NewImage("Plate", v.go.transform, new Vector2(lx, ly), size, null);
+        plate.rectTransform.pivot = lrt.pivot;
+        plate.rectTransform.SetSiblingIndex(lrt.GetSiblingIndex());
+        UiPlates.Apply(plate, PlateKind.Pill, null, true, true, size.y);
+        lrt.sizeDelta = new Vector2(tw, th);
+        lrt.anchoredPosition = new Vector2(lx + side * pad.x, ly + (side == 0 ? (ly >= 0f ? pad.y : -pad.y) : 0f));
     }
 
     private static void Paint()
@@ -280,6 +314,7 @@ internal static class CoopWheel
             bool any = selected >= 0 && selected < options.Count;
             center!.text = any ? WheelText.Label(options[selected].Label) + Detail(options[selected]) : WheelText.Title() + "\n<size=70%>" + target.label + "</size>" + HereInfo();
             center.color = any ? UiTheme.AccentColor : UiTheme.GeneralText; center.fontSize = any ? 22f : 26f;
+            FitPlate(centerPlate, center, PlateKind.Card, CenterTextW, 0f);
         }
     }
 
@@ -383,12 +418,12 @@ internal static class CoopWheel
         boxRoot.AddComponent<GraphicRaycaster>();
         var panel = new GameObject("Panel"); panel.transform.SetParent(boxRoot.transform, false);
         var prt = panel.AddComponent<RectTransform>(); prt.sizeDelta = new Vector2(760, 170); prt.anchoredPosition = new Vector2(0, -140);
-        panel.AddComponent<Image>().color = new Color(UiTheme.PanelColor.r, UiTheme.PanelColor.g, UiTheme.PanelColor.b, 0.95f);
+        UiPlates.Apply(panel.AddComponent<Image>(), PlateKind.Card, new Color(UiPlates.FillStrong.r, UiPlates.FillStrong.g, UiPlates.FillStrong.b, 0.95f), true, true, 170f);
         boxTitle = Text(panel.transform, new Vector2(0, 42), new Vector2(720, 70), 24f, FontStyles.Bold);
 
         var field = new GameObject("Input"); field.SetActive(false); field.transform.SetParent(panel.transform, false);
         var frt = field.AddComponent<RectTransform>(); frt.anchoredPosition = new Vector2(0, -38); frt.sizeDelta = new Vector2(700, 56);
-        var bg = field.AddComponent<Image>(); bg.color = UiTheme.SecondaryColor;
+        var bg = field.AddComponent<Image>(); UiPlates.Apply(bg, PlateKind.Label, UiTheme.SecondaryColor, true, false, 56f);
         var area = new GameObject("Text Area"); area.transform.SetParent(field.transform, false);
         var art = area.AddComponent<RectTransform>(); art.anchorMin = Vector2.zero; art.anchorMax = Vector2.one; art.offsetMin = new Vector2(12, 4); art.offsetMax = new Vector2(-12, -4);
         area.AddComponent<RectMask2D>();

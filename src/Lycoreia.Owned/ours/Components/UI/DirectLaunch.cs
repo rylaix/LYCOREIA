@@ -54,11 +54,11 @@ internal static class DirectLaunch
     internal static bool IsBusy => stage != Stage.Idle;
     internal static string StatusText => stage switch
     {
-        Stage.OpeningNewGame => "Creating a fresh co-op save...",
-        Stage.LoadingWorld => $"Loading the world, then {pendingLabel}...",
-        Stage.Settling => $"World loaded, {pendingLabel}...",
-        Stage.AwaitingServer => "Starting the server...",
-        Stage.AwaitingConnection => "Connecting to the host...",
+        Stage.OpeningNewGame => Lycoreia.Text.StatusText.CreatingSave,
+        Stage.LoadingWorld => Lycoreia.Text.StatusText.Loading(pendingLabel == "starting the server"),
+        Stage.Settling => Lycoreia.Text.StatusText.Loaded(pendingLabel == "starting the server"),
+        Stage.AwaitingServer => Lycoreia.Text.StatusText.StartingTheServer,
+        Stage.AwaitingConnection => Lycoreia.Text.MenuText.Connecting,
         _ => string.Empty
     };
 
@@ -128,7 +128,7 @@ internal static class DirectLaunch
 
         if (!LoadSave(save.Summary))
         {
-            Fail("Could not load that save. Load it from the game's menu, then use Multiplayer in the pause menu.");
+            Fail(Lycoreia.Text.StatusText.LoadFailed);
             return;
         }
 
@@ -152,7 +152,7 @@ internal static class DirectLaunch
 
         if (FreeSlotCount(saves) == 0)
         {
-            LastError = "All save slots are full. Pick a save below to use for joining (it will be replaced by the host's world), or delete one in the game's Load menu.";
+            LastError = Lycoreia.Text.StatusText.SlotsFullPickBelow;
             return;
         }
 
@@ -183,7 +183,7 @@ internal static class DirectLaunch
             var now = UnityEngine.Time.unscaledTime;
             if (now - startedAt > TimeoutSeconds)
             {
-                Fail("Loading the world took too long. Use Multiplayer in the pause menu once you are in the game.");
+                Fail(Lycoreia.Text.StatusText.TookTooLong);
                 return;
             }
 
@@ -225,10 +225,10 @@ internal static class DirectLaunch
                         Reset();
                     }
                     else if (!ModFacade.Client.IsConnected && !ModFacade.Client.IsConnecting && now - stageAt > 1f
-                             || now - stageAt > 45f)
+                             || now - stageAt > (Lycoreia.Mod.Session.PunchWaiting ? Lycoreia.Session.PunchWaitMs / 1000f + 10f : 45f))
                     {
                         Reset();
-                        LastError = "Could not reach the host. Check the code or address and try again (Join a world).";
+                        LastError = Lycoreia.Text.MenuText.HostUnreachable;
                         Log("connect-failed", string.Empty);
                         LycoreiaMenu.OpenMenu();
                     }
@@ -238,7 +238,7 @@ internal static class DirectLaunch
         catch (Exception ex)
         {
             OwnedLog.LogError($"Direct host/join failed: {ex}");
-            Fail("Something went wrong while loading. Use Multiplayer in the pause menu instead.");
+            Fail(Lycoreia.Text.StatusText.WentWrong);
         }
     }
 
@@ -374,7 +374,7 @@ internal static class DirectLaunch
 
         if (newGameMenuOpened && now - stageAt > 20f)
         {
-            Fail("Could not open the game's New Game screen. Start a new game yourself, then join from the pause menu.");
+            Fail(Lycoreia.Text.StatusText.NoNewGameScreen);
             return;
         }
 
@@ -383,7 +383,7 @@ internal static class DirectLaunch
         var slot = FreeSlotIndex();
         if (slot < 0)
         {
-            Fail("All save slots are full. Pick a save to use for joining, or delete one in the game's Load menu.");
+            Fail(Lycoreia.Text.StatusText.SlotsFull);
             return;
         }
 
@@ -422,7 +422,7 @@ internal static class DirectLaunch
         }
 
         Log("new-game-missing", string.Join(",", definitions.Where(d => d).Select(d => $"{d.name}>{DisplayName(d)}")));
-        Fail("Could not open the game's New Game screen. Start a new game yourself, then join from the pause menu.");
+        Fail(Lycoreia.Text.StatusText.NoNewGameScreen);
     }
 
     private static bool IsNewGameDefinition(OpenDisplayItemDefinition definition)

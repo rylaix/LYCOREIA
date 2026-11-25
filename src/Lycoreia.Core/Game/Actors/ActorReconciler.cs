@@ -86,7 +86,9 @@ namespace Lycoreia.Game
                 var go = im.GetGameObject(); live = go != null;
                 Vector3 p = live ? go.transform.position : im.lastPosition; Quaternion r = live ? go.transform.rotation : im.lastRotation;
                 skip = false;
-                return new ActorEntry { Id = im.actorId.Value, TypeId = typeId, Scene = SceneGroups.IdOf(im.sceneGroup), Position = GameActorWorld.W(p), Rotation = new Quat(r.x, r.y, r.z, r.w), Kind = SpawnKind.Normal };
+                var entry = new ActorEntry { Id = im.actorId.Value, TypeId = typeId, Scene = SceneGroups.IdOf(im.sceneGroup), Position = GameActorWorld.W(p), Rotation = new Quat(r.x, r.y, r.z, r.w), Kind = SpawnKind.Normal };
+                Hooks.SlimeRadiance.Fill(entry, im);                                                            // saved radiant slimes
+                return entry;
             }
             catch (Exception e) { Rl.Warn("entry", "actor entry failed: " + e.Message); return null; }
         }
@@ -261,7 +263,7 @@ namespace Lycoreia.Game
             var d = Mod.Diagnostics; if (d == null) return;
             d.Record("actors", "census", r.Summary() + "; " + r.Samples());
 #if DEEPLOG
-            // full per-actor dump for offline two-seat diffs (rewrite/tools/actor_diff.py), split under the detail limit
+            // full per-actor dump for offline two-seat diffs, split under the detail limit
             var facts = new Dictionary<long, LocalActorFact>(); foreach (var f in _facts) facts[f.Id] = f;
             var sb = new StringBuilder(); int part = 0; string stamp = Time.unscaledTimeAsDouble.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
             foreach (var e in a.Table.All)
@@ -299,7 +301,7 @@ namespace Lycoreia.Game
                 if (sb.Length > 0) sb.Append(';'); sb.Append(row);
             }
             d.Record("actors", "census-types", $"t={stamp}; part={part}; last=1; " + sb);
-            // issue3/issue4: players rarely send diagnostics.jsonl; the per-type growth goes to latest.log once a minute
+            // players rarely send diagnostics.jsonl; the per-type growth goes to latest.log once a minute
             var byName = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var f in _facts) { string n = f.TypeName ?? "?"; byName.TryGetValue(n, out int c); byName[n] = c + 1; }
             double now = Time.unscaledTimeAsDouble;

@@ -194,7 +194,7 @@ namespace Lycoreia.Net.Messages
     }
 
     /// <summary>
-    /// Ringtail stone form, sent by the seat that ran the native transformation (2026-11-12, issue3). Stone: <see cref="SlimeId"/>
+    /// Ringtail stone form, sent by the seat that ran the native transformation (2026-11-12). Stone: <see cref="SlimeId"/>
     /// became statue <see cref="StatueId"/> (others hide their slime object, keep its model). !Stone: the statue released the slime
     /// (others bring the slime object back from its model; the statue's own destroy arrives as an ActorDestroy).
     /// </summary>
@@ -208,6 +208,14 @@ namespace Lycoreia.Net.Messages
     /// A seat that is NOT the owner of an actor made the game kill it (water, vacuum, hazards on a Tarr) and had its native destroy suppressed:
     /// it asks the owner (via the host) to run that destroy. The owner's own destroy then publishes the normal ActorDestroy.
     /// </summary>
+    /// <summary>Owner: a slime turned radiant after its spawn was published (spawners set it right after instantiating). RadiantType = actor type id of the radiant base slime.</summary>
+    [Msg(73, Direction.Both, Delivery.ReliableOrdered, Lane.ActorCritical)]
+    public sealed class ActorRadiant : Msg
+    {
+        public long ActorId; public int RadiantType;
+        public override void Describe(Codec c) { c.Var(ref ActorId); c.Var(ref RadiantType); }
+    }
+
     [Msg(72, Direction.Both, Delivery.ReliableOrdered, Lane.ActorCritical)]
     public sealed class ActorKillRequest : Msg
     {

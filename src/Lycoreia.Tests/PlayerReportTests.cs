@@ -6,7 +6,7 @@ using Lycoreia.Net.Messages;
 
 namespace Lycoreia.Tests
 {
-    static class Issue34Tests
+    static class PlayerReportTests
     {
         public static void Register()
         {

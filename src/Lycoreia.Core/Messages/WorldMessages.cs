@@ -344,7 +344,19 @@ namespace Lycoreia.Net.Messages
     [Msg(405, Direction.Both, Delivery.ReliableOrdered, Lane.World)] public sealed class SanctuaryRoomState : Msg { public SanctuaryRoomRecord State = new SanctuaryRoomRecord(); public override void Describe(Codec c) { c.Wire(ref State); } }
     [Msg(406, Direction.Both, Delivery.ReliableOrdered, Lane.World)] public sealed class SanctuaryTheme : Msg { public string ThemeReferenceId; public bool IsOwned; public override void Describe(Codec c) { c.Str(ref ThemeReferenceId, 256); c.Flag(ref IsOwned); } }
     [Msg(410, Direction.GuestToHost, Delivery.ReliableOrdered, Lane.Economy)]
-    public sealed class ShopPurchaseRequest : Msg { public Guid RequestId; public string ShopAssetTag, ItemAssetGuid; public int Count; public override void Describe(Codec c) { c.Guid(ref RequestId); c.Str(ref ShopAssetTag, 256); c.Str(ref ItemAssetGuid, 64); c.Var(ref Count); } }
+    public sealed class ShopPurchaseRequest : Msg
+    {
+        public Guid RequestId; public string ShopAssetTag, ItemAssetGuid, CategoryName = ""; public int Count, UnlockType = -1;
+        // rc11: Record = the guest already bought natively (its own stock, its own wallet delta); the host only adds it to the shared
+        // purchase sets (sold-out / limits). PurchaseSetKey/Seed/ItemId are the game's own ShopDataPurchaseSet key and ShopItemId.
+        public bool Record; public string PurchaseSetKey = "", ItemId = ""; public int PurchaseSetSeed;
+        public override void Describe(Codec c)
+        {
+            c.Guid(ref RequestId); c.Str(ref ShopAssetTag, 256); c.Str(ref ItemAssetGuid, 64); c.Var(ref Count); c.Str(ref CategoryName, 256); c.Var(ref UnlockType);
+            c.Flag(ref Record); c.Str(ref PurchaseSetKey, 256); c.Var(ref PurchaseSetSeed); c.Str(ref ItemId, 256);
+            CategoryName ??= ""; PurchaseSetKey ??= ""; ItemId ??= "";
+        }
+    }   // rc7: category + unlock type pick the exact item (toys)
     [Msg(411, Direction.HostToGuest, Delivery.ReliableOrdered, Lane.Economy)]
     public sealed class ShopStateSnapshot : Msg { public Guid SessionId; public ulong Revision; public byte[] State = Array.Empty<byte>(); public override void Describe(Codec c) { c.Guid(ref SessionId); c.VarU(ref Revision); c.Blob(ref State, 4 << 20); } }
     [Msg(412, Direction.HostToGuest, Delivery.ReliableOrdered, Lane.Economy)]

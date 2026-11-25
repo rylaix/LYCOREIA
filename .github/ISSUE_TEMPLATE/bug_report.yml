@@ -6,7 +6,6 @@ body:
     attributes:
       value: |
         Thanks for testing! Co-op bugs almost always need logs from **both** players.
-        Please use the `-deeplog` package while reproducing.
 
         > **Privacy:** logs can contain IP addresses and player IDs. Before attaching, search them for
         > your public IP address and replace it with `x.x.x.x` if you do not want it published.

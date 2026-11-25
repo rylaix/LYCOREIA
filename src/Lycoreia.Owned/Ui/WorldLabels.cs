@@ -51,7 +51,7 @@ internal static class WorldLabels
         public GameObject Go = null!; public RectTransform Rt = null!; public CanvasGroup Group = null!; public Image Plate = null!; public TextMeshProUGUI Text = null!;
     }
 
-    private const float MaxWidth = 420f, PadX = 12f, PadY = 6f, GateEvery = 0.15f;
+    private const float MaxWidth = 420f, PadX = 12f, PadY = 5f, GateEvery = 0.15f;
     private static readonly Dictionary<string, Entry> Live = new();
     private static readonly Stack<Entry> Pool = new();
     private static readonly List<Entry> Gone = new();
@@ -112,7 +112,7 @@ internal static class WorldLabels
         var go = new GameObject("Label"); go.transform.SetParent(root!.transform, false);
         var rt = go.AddComponent<RectTransform>(); rt.anchorMin = rt.anchorMax = Vector2.zero; rt.pivot = new Vector2(0.5f, 0f);
         var group = go.AddComponent<CanvasGroup>(); group.interactable = false; group.blocksRaycasts = false;
-        var plate = go.AddComponent<Image>(); plate.color = new Color(0.05f, 0.04f, 0.10f, 0.58f); plate.raycastTarget = false;
+        var plate = go.AddComponent<Image>(); plate.raycastTarget = false; UiPlates.Apply(plate, PlateKind.Label);   // once at creation; the CanvasGroup fades plate, edge and shadow together
         var tgo = new GameObject("Text"); tgo.transform.SetParent(go.transform, false);
         var trt = tgo.AddComponent<RectTransform>(); trt.anchorMin = Vector2.zero; trt.anchorMax = Vector2.one; trt.offsetMin = new Vector2(PadX, PadY); trt.offsetMax = new Vector2(-PadX, -PadY);
         var t = tgo.AddComponent<TextMeshProUGUI>(); t.alignment = TextAlignmentOptions.Center; t.fontSize = 24f; t.enableWordWrapping = true; t.raycastTarget = false;
@@ -127,7 +127,7 @@ internal static class WorldLabels
         string text = useShort ? e.Short : e.Full;
         e.Text.richText = e.Rich; e.Text.text = text; e.Shown = text; e.ShownShort = useShort;
         var size = e.Text.GetPreferredValues(text, MaxWidth - 2 * PadX, 0f);
-        e.Rt.sizeDelta = new Vector2(Mathf.Min(size.x, MaxWidth - 2 * PadX) + 2 * PadX, size.y + 2 * PadY);
+        e.Rt.sizeDelta = UiPlates.Wrap(new Vector2(Mathf.Min(size.x, MaxWidth - 2 * PadX), size.y), PlateKind.Label);
         e.Dirty = false;
     }
 

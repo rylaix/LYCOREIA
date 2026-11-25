@@ -211,7 +211,7 @@ namespace Lycoreia.Actors
 
     /// <summary>
     /// Plorts never grow natively: SlimeEat.Produce tweens a new plort from 0.01 to its spawn scale in 0.5 s, the vacuum only shrinks.
-    /// A plort above its prefab scale is a mod-side corruption (issue4 "slime-sized plort"); it is put back and logged.
+    /// A plort above its prefab scale is a mod-side corruption ("slime-sized plort"); it is put back and logged.
     /// </summary>
     public static class PlortScaleRule
     {
@@ -223,7 +223,7 @@ namespace Lycoreia.Actors
     /// Ringtail day/night stone form (native TurnToStoneInDaylight.BecomeStatue spawns a statue actor and removes the slime's object,
     /// keeping its model; RingtailStatue.Unstatue re-creates the slime from that model and destroys the statue). Both run on every
     /// seat natively, so before 2026-11-12 every seat published its own statue and every statue copy re-created the slime: Ringtails
-    /// multiplied each day/night cycle (issue3). Only the owner of the actor that transforms may run the transformation.
+    /// multiplied each day/night cycle. Only the owner of the actor that transforms may run the transformation.
     /// </summary>
     public static class StatueRules
     {
@@ -234,7 +234,7 @@ namespace Lycoreia.Actors
     /// <summary>
     /// A slime eats only food its own seat simulates. Native SlimeEat.EatAndProduce destroys the food (Destroyer.DestroyActor) and then
     /// produces plorts; for food owned by another seat that destroy is suppressed, so before 2026-11-12 the plorts appeared while
-    /// the food (often a chicken shot into a corral by the other player) stayed, and was eaten again and again (issue4 chicken burst,
+    /// the food (often a chicken shot into a corral by the other player) stayed, and was eaten again and again (chicken burst,
     /// actor table +800 in 13 min). Untracked food (local only) is the native case.
     /// </summary>
     public static class FoodAuthority

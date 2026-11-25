@@ -14,9 +14,17 @@ Made by **[Rylaix](https://github.com/rylaix)** (core developer) and **[Kum1te](
 
 ---
 
-## Testing now: 2.1.0-rc4
+## New in 2.1.0
 
-A release candidate of 2.1.0 (co-op board, co-op wheel, boost jump and many sync fixes) is out as a diagnostic build. Grab `Lycoreia-2.1.0-rc4.zip` from the Releases page, play with a friend (both need rc4), and send `UserData/Lycoreia/latest.log` and `diagnostics.jsonl` from both players on Discord. See the [changelog](CHANGELOG.md).
+- **Play together**: boost jump, the co-op wheel (hold the middle mouse button) to pin jobs and leave notes, a co-op
+  board with jobs, timed expeditions, slime notes and a session recap.
+- **Join through Steam**: no port forwarding, works behind a shared provider address (CGNAT). Let-in codes for
+  players without Steam, and direct joining on the same home network.
+- **Spanish**, a reviewed Russian translation, and many sync fixes (shop purchases of the joining player, radiant
+  slimes, the Grey Labyrinth, silos and collectors, doors and gates, and more).
+- **For mod authors**: a public API and an MIT-licensed SDK (`Lycoreia-SDK-2.1.0.zip` on the release page).
+
+Every player needs 2.1.0. See the [changelog](CHANGELOG.md).
 
 ---
 
@@ -53,8 +61,8 @@ Everything that changed is in the [changelog](CHANGELOG.md).
 
 1. Install [MelonLoader](https://github.com/LavaGang/MelonLoader) **0.7.x** for Slime Rancher 2 and start
    the game once.
-2. Download `Lycoreia.dll` from the [latest release](https://github.com/rylaix/Lycoreia/releases/latest)
-   and put it in the game's `Mods` folder.
+2. Download `Lycoreia-2.1.0.zip` from the [latest release](https://github.com/rylaix/Lycoreia/releases/latest)
+   and put `Mods/Lycoreia.dll` from it in the game's `Mods` folder.
 3. **Every player** needs the same Lycoreia version. A player on a different build is refused with a
    readable message.
 
@@ -73,8 +81,7 @@ Discord client (regular, Flatpak, Snap or Vesktop).
 
 ## Reporting bugs
 Use the [bug report form](https://github.com/rylaix/Lycoreia/issues/new/choose) and attach logs from
-**both** players: `UserData/Lycoreia/latest.log` and `diagnostics.jsonl` (use the `-deeplog` package
-from the release page to get detailed diagnostics). Logs can contain IP addresses and player IDs;
+**both** players: `UserData/Lycoreia/latest.log` and `diagnostics.jsonl`. Logs can contain IP addresses and player IDs;
 replace your public IP with `x.x.x.x` before posting if you prefer.
 
 Questions and help: [Discord](https://discord.gg/EvD7WhSwqh).

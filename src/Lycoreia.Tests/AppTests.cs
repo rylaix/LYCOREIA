@@ -29,10 +29,11 @@ namespace Lycoreia.Tests
         public Task<bool> PendingDiscovery; public Task PendingMap;
         public string Detail { get; set; } = ""; public Exception DiscoverThrows; public bool HasDevice = true; public int FailMaps; public List<int> Mapped = new List<int>(), Unmapped = new List<int>(), Allowed = new List<int>(), Removed = new List<int>(); public int MapCalls;
         public Task<bool> DiscoverAsync(CancellationToken ct) => PendingDiscovery ?? (DiscoverThrows != null ? Task.FromException<bool>(DiscoverThrows) : Task.FromResult(HasDevice));
-        public Task<IPAddress> ExternalIpAsync(CancellationToken ct) => Task.FromResult(IPAddress.Parse("203.0.113.5"));
+        public IPAddress Wan; public bool FailFirewall; public IPAddress LocalAddress { get; set; }
+        public Task<IPAddress> ExternalIpAsync(CancellationToken ct) => Wan != null ? Task.FromResult(Wan) : Task.FromException<IPAddress>(new InvalidOperationException("no external address"));
         public Task MapAsync(int p, CancellationToken ct) { MapCalls++; if (PendingMap != null) return PendingMap; if (FailMaps > 0) { FailMaps--; throw new InvalidOperationException("conflict"); } Mapped.Add(p); return Task.CompletedTask; }
         public Task UnmapAsync(int p, CancellationToken ct) { Unmapped.Add(p); return Task.CompletedTask; }
-        public void Allow(int p) => Allowed.Add(p); public void Remove(int p) => Removed.Add(p);
+        public void Allow(int p) { if (FailFirewall) throw new InvalidOperationException("netsh exit code 1"); Allowed.Add(p); } public void Remove(int p) => Removed.Add(p);
     }
 
     static class AppTests
@@ -69,7 +70,7 @@ namespace Lycoreia.Tests
             });
             T.Test("snapshot/only broad replica failures request a resync", () =>
             {
-                T.True(!Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(7, 536), "7 of 536 (issue 2026-11-09) continues");
+                T.True(!Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(7, 536), "7 of 536 continues");
                 T.True(!Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(3, 10)); T.True(Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(10, 40)); T.True(Lycoreia.Actors.ActorSync.SnapshotFailureIsBroad(536, 536));
             });
             T.Test("commands/host connect resync cheats cleanup", () =>
@@ -114,6 +115,45 @@ namespace Lycoreia.Tests
                 T.True(port >= 49152 && port <= 65535); T.Eq(port, nat.Mapped.Single()); T.Eq(port, nat.Allowed.Single()); T.True(AutoHost.TryDecodeJoinCode(ah.JoinCode, out var ip, out int p2)); T.Eq("198.51.100.7", ip.ToString()); T.Eq(port, p2);
                 ah.ReleaseAsync().GetAwaiter().GetResult(); T.Eq(port, nat.Unmapped.Single()); T.Eq(port, nat.Removed.Single()); T.True(ah.JoinCode == null);
                 ah.ReleaseAsync().GetAwaiter().GetResult(); T.Eq(1, nat.Unmapped.Count, "release is a no-op when nothing is mapped");
+            });
+            T.Test("autohost/router WAN decides reachability and the advertised address", () =>
+            {
+                IPAddress A(string s) => IPAddress.Parse(s);
+                (HostReach r, string ip) Run(string wan, bool fwFail = false)
+                {
+                    var nat = new FakeNat { Wan = wan == null ? null : A(wan), FailFirewall = fwFail };
+                    var ah = new AutoHost(nat, nat, _ => Task.FromResult("198.51.100.7"), new Random(3));
+                    int port = ah.PrepareAsync().GetAwaiter().GetResult();
+                    T.True(AutoHost.TryDecodeJoinCode(ah.JoinCode, out var ip, out int p)); T.Eq(port, p);
+                    T.Eq(fwFail, ah.FirewallFailed); T.True(ah.Summary.Contains("reach=" + ah.Reach), ah.Summary);
+                    T.True(!ah.Summary.Contains("198.51.100.7") && !ah.Summary.Contains("100.72.13.9"), "addresses masked: " + ah.Summary);
+                    return (ah.Reach, ip.ToString());
+                }
+                T.Eq((HostReach.Public, "198.51.100.7"), Run("198.51.100.7"));
+                T.Eq((HostReach.Unknown, "198.51.100.7"), Run(null));
+                T.Eq((HostReach.CarrierNat, "198.51.100.7"), Run("100.72.13.9"));
+                T.Eq((HostReach.DoubleNat, "198.51.100.7"), Run("192.168.1.20"));
+                T.Eq((HostReach.DoubleNat, "198.51.100.7"), Run("10.0.0.2"));
+                T.Eq((HostReach.VpnOrProxy, "203.0.113.5"), Run("203.0.113.5"));   // join code follows the router that holds the mapping
+                T.Eq((HostReach.Public, "198.51.100.7"), Run("198.51.100.7", fwFail: true));
+                T.Eq("100.72.x.x (cgnat)", NetAddr.Describe(A("100.72.13.9"))); T.Eq("198.x.x.x (public)", NetAddr.Describe(A("198.51.100.7")));
+                T.Eq("private", NetAddr.Kind(A("172.20.1.1"))); T.Eq("public", NetAddr.Kind(A("172.32.1.1"))); T.Eq("public", NetAddr.Kind(A("100.128.0.1")));
+                T.True(Lycoreia.Text.MenuText.HostReachWarning(HostReach.Public) == "" && Lycoreia.Text.MenuText.HostReachWarning(HostReach.CarrierNat).Contains("CGNAT"));
+            });
+            T.Test("autohost/join code carries the LAN address, old codes still decode", () =>
+            {
+                IPAddress A(string s) => IPAddress.Parse(s);
+                var nat = new FakeNat { Wan = A("198.51.100.7"), LocalAddress = A("192.168.1.34") };
+                var ah = new AutoHost(nat, nat, _ => Task.FromResult("198.51.100.7"), new Random(4)); int port = ah.PrepareAsync().GetAwaiter().GetResult();
+                T.True(AutoHost.TryDecodeJoinCode(ah.JoinCode, out var ip, out int p, out var lan)); T.Eq("198.51.100.7", ip.ToString()); T.Eq(port, p); T.Eq("192.168.1.34", lan?.ToString());
+                T.True(AutoHost.TryDecodeJoinCode(ah.JoinCode, out var ip3, out int p3)); T.Eq("198.51.100.7", ip3.ToString()); T.Eq(port, p3);   // legacy reader
+                var old = AutoHost.EncodeJoinCode(A("198.51.100.7"), 50000); T.True(AutoHost.TryDecodeJoinCode(old, out _, out int p4, out var lan4)); T.Eq(50000, p4); T.True(lan4 == null);
+                var v6 = AutoHost.EncodeJoinCode(A("2001:db8::5"), 50001, A("10.0.0.9")); T.True(AutoHost.TryDecodeJoinCode(v6, out var ip6, out int p6, out var lan6)); T.Eq("2001:db8::5", ip6.ToString()); T.Eq(50001, p6); T.Eq("10.0.0.9", lan6?.ToString());
+                nat = new FakeNat { Wan = A("198.51.100.7"), LocalAddress = A("203.0.113.9") };   // a public "LAN" address is never advertised
+                ah = new AutoHost(nat, nat, _ => Task.FromResult("198.51.100.7")); ah.PrepareAsync().GetAwaiter().GetResult();
+                T.True(AutoHost.TryDecodeJoinCode(ah.JoinCode, out _, out _, out var lan5)); T.True(lan5 == null && ah.LanIp == null);
+                T.True(NetAddr.SameSubnet(A("192.168.1.34"), A("192.168.1.20"), A("255.255.255.0"))); T.True(!NetAddr.SameSubnet(A("192.168.1.34"), A("192.168.2.20"), A("255.255.255.0")));
+                T.True(!NetAddr.SameSubnet(A("192.168.1.34"), A("192.168.1.20"), A("0.0.0.0")));
             });
             T.Test("autohost/five attempts then plain failure messages", () =>
             {

@@ -25,6 +25,8 @@ namespace Lycoreia.Net
         public event DatagramHandler Received;
         public event Action<SocketError, string> Faulted;
         public EndPoint LocalEndPoint => _s.LocalEndPoint;
+        /// <summary>STUN requests in flight on this socket, by txn id; their replies never reach the game protocol.</summary>
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Threading.Tasks.TaskCompletionSource<IPEndPoint>> Pending = new();
 
         /// <summary>Server: bind a port. Dual-stack on the IPv6 wildcard when ipv6 is requested, else IPv4.</summary>
         public static UdpTransport Listen(int port, bool ipv6)
@@ -77,6 +79,11 @@ namespace Lycoreia.Net
                     EndPoint from = any;
                     int n = _s.ReceiveFrom(buf, ref from);
                     if (from is IPEndPoint ip && ip.Address.IsIPv4MappedToIPv6) from = new IPEndPoint(ip.Address.MapToIPv4(), ip.Port);
+                    if (!Pending.IsEmpty && Stun.TryTxn(buf, 0, n, out var txn) && Pending.TryGetValue(txn, out var waiter))
+                    {
+                        waiter.TrySetResult(Stun.TryParseResponse(buf, 0, n, out var mapped) ? mapped : null);
+                        continue;
+                    }
                     Received?.Invoke(from, buf, 0, n);
                 }
                 catch (SocketException e)

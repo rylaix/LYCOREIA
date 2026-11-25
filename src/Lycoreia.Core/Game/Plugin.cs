@@ -47,6 +47,10 @@ namespace Lycoreia.Game
         {
             if (_initStarted) return;      // one-shot even if a step below throws (a second run would start a second tick thread and re-register features)
             _initStarted = true;
+            Lycoreia.Text.CoopText.MainThreadId = System.Environment.CurrentManagedThreadId;   // rc6: the language lookup calls Unity; other threads use the cached value
+#if LYC_TEST
+            { var forced = System.Environment.GetEnvironmentVariable("LYCOREIA_TEST_LANG"); if (!string.IsNullOrEmpty(forced)) { Lycoreia.Text.CoopText.SetLangForTests(forced); MelonLoader.MelonLogger.Msg("[text] language forced by LYCOREIA_TEST_LANG: " + forced); } }
+#endif
             Prefs.Create();
             Log.Console = (lv, m) => { switch (lv) { case LogLevel.Warning: MelonLoader.MelonLogger.Warning(m); break; case LogLevel.Error: MelonLoader.MelonLogger.Error(m); break; default: MelonLoader.MelonLogger.Msg(m); break; } };
             Mod.Init(MelonLoader.Utils.MelonEnvironment.UserDataDirectory, diagnostics: Prefs.Get<bool>(Settings.DevDiagnostics) || BuildInfo.Diagnostics);
@@ -108,7 +112,7 @@ namespace Lycoreia.Game
             if (sceneName == "MainMenuEnvironment") Avatars.AvatarTemplate.BeginCapture();
             if (WorldExit.ShouldEndSession(Mod.IsNetworkActive, sceneName))
             {
-                // issue4: the host's world is gone; never keep serving snapshots or actor state from the main menu
+                // the host's world is gone; never keep serving snapshots or actor state from the main menu
                 Mod.Diagnostics?.Record("session", "world-exit", $"scene={sceneName}; host={Mod.IsHost}");
                 if (Mod.IsHost) { Log.Info("left the world while hosting: closing the server"); Mod.Session.StopServer(); }
                 else if (Mod.IsGuest) { Log.Info("left the world: disconnecting from the host"); Mod.Session.Disconnect(null, true); }
@@ -168,14 +172,14 @@ namespace Lycoreia.Game
                 Mod.Actors.ExecuteKill = GameActorWorld.ExecuteKillRequest;                                                    // a non-owner's Tarr kill runs on the owner
                 ActorReconciler.Install(Mod.Session); Mod.Session.ServerStarted += ActorReconciler.EnsureHostTypes;
                 Coop.CoopRuntime.Install(Mod.Session); Pumps.Add(new Coop.CoopRuntime());                                     // 2.1 co-op board
-                Hooks.RingtailStatues.Install(Mod.Session);                                                                    // owner-only Ringtail stone form (issue3)
+                Hooks.SlimeRadiance.Install();                                                                                  // radiant slimes on every seat
+                Hooks.RingtailStatues.Install(Mod.Session);                                                                    // owner-only Ringtail stone form
                 Mod.Guest.Applier = new GameSnapshotApplier(Mod.Actors);
                 Pumps.Add(new ArbiterPump()); Pumps.Add(new ActorRuntime()); Pumps.Add(new ActorReconciler());
                 World.WorldRuntime.Init(Mod.Session, Mod.Snapshots); Pumps.Add(new World.WorldRuntime.Pump());
                 var avatars = Avatars.RemoteAvatars.Install(Mod.Session); Pumps.Add(avatars); LatePumps.Add(avatars.Late); Pumps.Add(new Avatars.AvatarBodies());   // 2.1 player bodies + boost jump   // rigs pose bones after the animator
 #if DEEPLOG
                 Pumps.Add(new Hooks.PauseTrace.Poll());                                                                         // installs the pause hooks on the first in-game frame
-                Pumps.Add(new Avatars.AvatarProbe());                                                                           // animator facts for the avatar mapping ([anim-probe] lines)
 #endif
                 try { GameLayersReady?.Invoke(); } catch (Exception e) { Log.Error("owned feature registration", e); }
                 Mod.Session.ServerStarted += () => { Hooks.SpawnGate.Reset(); GameCommands.AutoBackup("host"); };
@@ -196,6 +200,7 @@ namespace Lycoreia.Game
             long started = LagProbe.Start(); Watchdog.Step("dispatcher (message handlers)");
             try { Mod.Node.Pump(); } catch (Exception e) { Log.Error("dispatcher", e); }
             finally { LagProbe.End("dispatcher", started); }
+            try { SteamNet.Pump(Mod.Node.Clock()); } catch (Exception e) { Log.Warn("steam pump: " + e.Message); }
             Hooks.NetworkMenuInput.Pump();
             try { WorldExit.Observe(Mod.IsNetworkActive, GameState.Ready && !GameState.Loading); } catch { }
             started = LagProbe.Start();
@@ -213,7 +218,7 @@ namespace Lycoreia.Game
         static readonly HashSet<IFramePump> _disabledPumps = new HashSet<IFramePump>();
 
         /// <summary>A pump that references a game type or member this game build lacks fails identically every frame
-        /// (issue 2026-11-09: 1120 PaletteDirector TypeLoadExceptions in one minute): log it once and switch it off.</summary>
+        /// (1120 PaletteDirector TypeLoadExceptions in one minute): log it once and switch it off.</summary>
         static void PumpFailed(IFramePump p, string kind, Exception e)
         {
             if (e is TypeLoadException || e is MissingMemberException || e is TypeInitializationException && e.InnerException is TypeLoadException)

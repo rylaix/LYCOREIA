@@ -117,7 +117,81 @@ internal static class UiFonts
     // rc3 fix: the game's default TMP font is "Lexend-Regular (Latin)" with no Cyrillic glyphs, so Russian co-op text drew only
     // punctuation and digits. The game renders Russian through a separate font asset; we add any loaded font that really has the
     // glyphs as a fallback (on our default font and in TMP's global fallback list), so every TMP text of ours can draw Cyrillic.
-    private static bool cyrillicReady, cyrillicMissLogged;
+    private static bool cyrillicReady, cyrillicMissLogged, cyrillicGenerated;
+    private static float cyrillicUpgradeAt;
+    private static TMP_FontAsset? generatedCyrillic;
+
+    /// <summary>A dynamic TMP font with Cyrillic made from an OS font or Unity's built-in font. Null when none works. Never throws.</summary>
+    private static TMP_FontAsset? GeneratedCyrillic()
+    {
+        if (generatedCyrillic) return generatedCyrillic;
+        var tried = new List<string>();
+        foreach (var family in new[] { "Segoe UI", "Arial", "Tahoma", "Verdana", "DejaVu Sans", "Liberation Sans", "Noto Sans" })
+        {
+            try
+            {
+                var asset = TMP_FontAsset.CreateFontAsset(family, "Regular", 90);
+                if (asset && asset.HasCharacter(CyrillicProbe, false, true))
+                {
+                    asset.name = "Lycoreia Cyrillic (" + family + ")";
+                    OwnedLog.LogMessage("font cyrillic: generated fallback from system font " + family);
+                    return generatedCyrillic = asset;
+                }
+                tried.Add(family + (asset ? "=no glyphs" : "=missing"));
+            }
+            catch (Exception ex) { tried.Add(family + "=" + ex.GetType().Name); }
+        }
+        foreach (var builtin in new[] { "LegacyRuntime.ttf", "Arial.ttf" })
+        {
+            try
+            {
+                var font = Resources.GetBuiltinResource<Font>(builtin);
+                if (!font) { tried.Add(builtin + "=missing"); continue; }
+                var asset = TMP_FontAsset.CreateFontAsset(font);
+                if (asset && asset.HasCharacter(CyrillicProbe, false, true))
+                {
+                    asset.name = "Lycoreia Cyrillic (" + builtin + ")";
+                    OwnedLog.LogMessage("font cyrillic: generated fallback from built-in " + builtin);
+                    return generatedCyrillic = asset;
+                }
+                tried.Add(builtin + (asset ? "=no glyphs" : "=failed"));
+            }
+            catch (Exception ex) { tried.Add(builtin + "=" + ex.GetType().Name); }
+        }
+        OwnedLog.LogWarning("font cyrillic: could not generate a fallback: " + string.Join(", ", tried));
+        return null;
+    }
+
+    /// <summary>While the generated fallback is in use, look for the game's own Cyrillic font every 10 s and put it first.</summary>
+    private static void UpgradeGeneratedCyrillic()
+    {
+        var now = UnityEngine.Time.unscaledTime;
+        if (now < cyrillicUpgradeAt) return;
+        cyrillicUpgradeAt = now + 10f;
+        try
+        {
+            var main = Default;
+            TMP_FontAsset? best = null; var bestScore = int.MinValue;
+            foreach (var candidate in Resources.FindObjectsOfTypeAll<TMP_FontAsset>())
+            {
+                if (!candidate || candidate == main || candidate == generatedCyrillic) continue;
+                bool has; try { has = candidate.HasCharacter(CyrillicProbe, false, false); } catch { has = false; }
+                if (!has) continue;
+                var score = CyrillicScore(candidate.name ?? string.Empty);
+                if (score > bestScore) { best = candidate; bestScore = score; }
+            }
+            if (!best) return;
+            if (main)
+            {
+                var table = main!.fallbackFontAssetTable;
+                if (table != null) { if (table.Contains(best!)) table.Remove(best!); table.Insert(0, best!); }
+            }
+            try { var global = TMP_Settings.fallbackFontAssets; if (global != null) { if (global.Contains(best!)) global.Remove(best!); global.Insert(0, best!); } } catch { }
+            cyrillicGenerated = false;
+            OwnedLog.LogMessage($"font cyrillic: game font '{best!.name}' now preferred over the generated fallback");
+        }
+        catch (Exception ex) { cyrillicGenerated = false; OwnedLog.LogWarning("font cyrillic upgrade failed: " + ex.Message); }
+    }
     private static float cyrillicRetryAt = -1f;
     private const char CyrillicProbe = (char)0x0416;   // Cyrillic capital Zhe
 
@@ -146,7 +220,11 @@ internal static class UiFonts
     internal static bool EnsureCyrillic()
     {
         if (cyrillicReady)
+        {
+            if (cyrillicGenerated)
+                UpgradeGeneratedCyrillic();
             return true;
+        }
         try
         {
             var now = UnityEngine.Time.unscaledTime;
@@ -182,8 +260,15 @@ internal static class UiFonts
 
             if (!best)
             {
-                if (!cyrillicMissLogged) { cyrillicMissLogged = true; OwnedLog.LogWarning("font cyrillic: no loaded font has Cyrillic yet; co-op text stays English until one loads"); }
-                return false;
+                // with the game in English its Cyrillic fonts are never loaded, so Russian typed in chat drew nothing.
+                // Build a dynamic font from the system/built-in font instead; a game font replaces it as soon as one loads.
+                best = GeneratedCyrillic();
+                if (!best)
+                {
+                    if (!cyrillicMissLogged) { cyrillicMissLogged = true; OwnedLog.LogWarning("font cyrillic: no loaded font has Cyrillic yet; co-op text stays English until one loads"); }
+                    return false;
+                }
+                cyrillicGenerated = true;
             }
 
             if (main)
@@ -429,6 +514,8 @@ internal sealed class UiPanel : UiNode
     public UnityEngine.Color? CustomColor;
     public Sprite? Sprite;
     public int CornerRadius;
+    /// <summary>Card plate: token radius, 1 px edge and soft shadow (top-level panels only).</summary>
+    public bool Plate;
     public Image? Picture;
 
     protected override void Build(RectTransform rt)
@@ -441,6 +528,8 @@ internal sealed class UiPanel : UiNode
             Picture.sprite = Sprite;
             Picture.type = UnityEngine.UI.Image.Type.Simple;
         }
+        else if (Plate)
+            UiPlates.Apply(Picture, PlateKind.Card, color);
     }
 }
 
@@ -494,7 +583,7 @@ internal sealed class UiText : UiNode
 
 internal sealed class UiButton : UiNode
 {
-    public int CornerRadius = 16;
+    public int CornerRadius = UiPlates.RadiusLabel;
     public UiButtonStyle Style = UiButtonStyle.Normal;
     public bool Interactable = true;
     public Action? OnClick;
@@ -519,7 +608,7 @@ internal sealed class UiButton : UiNode
         var labelRt = rt;
         button.onClick.AddListener((UnityAction)(() =>
         {
-            // issue7: the sound, the diagnostics and the gate release must never swallow the click itself; each is isolated.
+            // the sound, the diagnostics and the gate release must never swallow the click itself; each is isolated.
             string label = "?";
             try { var t = labelRt ? labelRt.GetComponentInChildren<TMP_Text>(true) : null; label = t ? t!.text : labelRt ? labelRt.name : "?"; } catch { }
             try { InputGate.Set("menu", false); } catch { }              // a click on a button always ends text typing; the menu re-asserts it if a field still has focus
@@ -546,7 +635,7 @@ internal sealed class UiInput : UiNode
     public float FontSize = 26f;
     public UiColor TextColor = UiColor.TextGeneral;
     public UiColor BackgroundColor = UiColor.Secondary;
-    public int CornerRadius = 12;
+    public int CornerRadius = UiPlates.RadiusLabel;
     public Action<string>? OnChanged;
 
     protected override void Build(RectTransform rt)
@@ -615,7 +704,7 @@ internal sealed class UiCheckbox : UiNode
     public bool Value;
     public UiColor BackgroundColor = UiColor.Secondary;
     public UiColor CheckColor = UiColor.Accent;
-    public int CornerRadius = 10;
+    public int CornerRadius = UiPlates.RadiusLabel;
     public Action<bool>? OnChanged;
 
     protected override void Build(RectTransform rt)

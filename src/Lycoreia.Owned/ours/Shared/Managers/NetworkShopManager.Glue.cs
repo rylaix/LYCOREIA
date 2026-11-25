@@ -52,13 +52,13 @@ internal sealed class ShopStateSnapshotPacket : IWire
             Runtimes = new[] { new ShopRuntimeState { ShopAssetTag = "shop-a", IsAvailable = true, HasGameWorldTime = true, GameWorldTimeSeconds = 12345.5,
                 Categories = new[] { new ShopCategoryState { AnalyticsName = "daily", LastSeedUsed = 41, NextOverrideIndex = 3,
                     Items = new[] { new ShopItemStockState { AssetGuid = "item-a", IsSoldOut = true }, new ShopItemStockState { AssetGuid = "item-b" } } } } } },
-            PurchaseSets = new[] { new ShopPurchaseSetState { CategoryIdentifier = "category-a", Seed = 9, Purchases = new[] { new ShopPurchaseEntryState { ItemAssetGuid = "item-a", UnlockType = 2, Count = 1 } } } },
+            PurchaseSets = new[] { new ShopPurchaseSetState { CategoryIdentifier = "category-a", Seed = 9, Purchases = new[] { new ShopPurchaseEntryState { ItemAssetGuid = "item-a", UnlockType = 2, Count = 1, ItemId = "id-a" } } } },
             PendingSpawns = new[] { new ShopPendingSourceState { SourceId = "source-a", IdentifiableIds = new[] { 11, 23 } } }
         };
         var actual = From(expected);
         return actual.SessionId == expected.SessionId && actual.Revision == expected.Revision &&
                actual.Runtimes.Length == 1 && actual.Runtimes[0].Categories[0].Items[0].IsSoldOut && actual.Runtimes[0].Categories[0].Items[1].AssetGuid == "item-b" &&
-               actual.Runtimes[0].GameWorldTimeSeconds == 12345.5 && actual.PurchaseSets[0].Purchases[0].UnlockType == 2 &&
+               actual.Runtimes[0].GameWorldTimeSeconds == 12345.5 && actual.PurchaseSets[0].Purchases[0].UnlockType == 2 && actual.PurchaseSets[0].Purchases[0].ItemId == "id-a" &&
                actual.PendingSpawns[0].IdentifiableIds.SequenceEqual(new[] { 11, 23 });
     }
 }
@@ -99,7 +99,8 @@ internal sealed class ShopPurchaseSetState : IWire
 internal sealed class ShopPurchaseEntryState : IWire
 {
     public string ItemAssetGuid = string.Empty; public int UnlockType, Count;
-    public void Describe(Codec c) { c.Str(ref ItemAssetGuid, 128); c.Var(ref UnlockType); c.Var(ref Count); ItemAssetGuid ??= string.Empty; }
+    public string ItemId = string.Empty;   // rc11: the game's ShopItemId; purchase history no longer depends on both seats stocking the item
+    public void Describe(Codec c) { c.Str(ref ItemAssetGuid, 128); c.Var(ref UnlockType); c.Var(ref Count); c.Str(ref ItemId, 256); ItemAssetGuid ??= string.Empty; ItemId ??= string.Empty; }
 }
 
 internal sealed class ShopPendingSourceState : IWire

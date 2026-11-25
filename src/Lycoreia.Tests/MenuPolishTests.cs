@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Rylaix and Kum1te. All rights reserved.
 // Lycoreia Source-Available License 1.0 - see LICENSE. Copying, redistribution and derivative works are prohibited.
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.IO;
 using Lycoreia.Coop;
@@ -52,17 +53,47 @@ namespace Lycoreia.Tests
                 T.Eq("generic", JobKinds.Of("", "Anything", false), "generic"); T.Eq("generic", JobKinds.Of(null, null, false), "nulls");
                 foreach (var k in JobKinds.All) T.True(!string.IsNullOrEmpty(k), "kind name");
             });
-            T.Test("menu polish/release notes: Russian list has the English shape", () =>
+            T.Test("menu polish/release notes: Russian and Spanish lists have the English shape, titles are short", () =>
             {
-                T.Eq(WhatsNew.Sections.Count, WhatsNew.SectionsRu.Count, "sections");
-                for (int i = 0; i < WhatsNew.Sections.Count; i++)
+                foreach (var other in new[] { WhatsNew.SectionsRu, WhatsNew.SectionsEs })
                 {
-                    T.Eq(WhatsNew.Sections[i].Items.Count, WhatsNew.SectionsRu.Count > i ? WhatsNew.SectionsRu[i].Items.Count : -1, "items of section " + i);
-                    for (int j = 0; j < WhatsNew.Sections[i].Items.Count; j++)
-                        T.Eq(string.IsNullOrEmpty(WhatsNew.Sections[i].Items[j].tryIt), string.IsNullOrEmpty(WhatsNew.SectionsRu[i].Items[j].tryIt), "try-it presence " + i + "/" + j);
+                    T.Eq(WhatsNew.Sections.Count, other.Count, "sections");
+                    for (int i = 0; i < WhatsNew.Sections.Count; i++)
+                    {
+                        T.True(!string.IsNullOrEmpty(other[i].Tab) && other[i].Tab.Length <= 18, "short tab name " + other[i].Tab);
+                        T.Eq(WhatsNew.Sections[i].Items.Count, other[i].Items.Count, "items of section " + i);
+                        for (int j = 0; j < WhatsNew.Sections[i].Items.Count; j++)
+                        {
+                            T.Eq(WhatsNew.Sections[i].Items[j].TryIt.Length == 0, other[i].Items[j].TryIt.Length == 0, "try-it presence " + i + "/" + j);
+                            T.True(other[i].Items[j].Title.Length <= 28 && other[i].Items[j].Title.Split(' ').Length <= 4, "card title stays short: " + other[i].Items[j].Title);
+                            T.True(other[i].Items[j].Text != WhatsNew.Sections[i].Items[j].Text, "translated: " + other[i].Items[j].Text);
+                        }
+                    }
                 }
                 T.True(ReferenceEquals(WhatsNew.Sections, WhatsNew.For("en")), "en"); T.True(ReferenceEquals(WhatsNew.Sections, WhatsNew.For("de")), "other");
-                T.True(ReferenceEquals(WhatsNew.SectionsRu, WhatsNew.For("ru")), "ru");
+                T.True(ReferenceEquals(WhatsNew.SectionsRu, WhatsNew.For("ru")), "ru"); T.True(ReferenceEquals(WhatsNew.SectionsEs, WhatsNew.For("es")), "es");
+            });
+            T.Test("menu polish/every menu string is translated to Spanish and Russian", () =>
+            {
+                // A string that stays English in another language is a missed translation; these few are the same in every language.
+                var same = new HashSet<string> { "Port", "IP" };
+                try
+                {
+                    var props = typeof(MenuText).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static).Where(p => p.PropertyType == typeof(string)).ToList();
+                    CoopText.SetLangForTests("en"); var en = props.ToDictionary(p => p.Name, p => (string)p.GetValue(null));
+                    foreach (var lang in new[] { "ru", "es" })
+                    {
+                        CoopText.SetLangForTests(lang);
+                        foreach (var p in props) { var v = (string)p.GetValue(null); if (!same.Contains(en[p.Name])) T.True(v != en[p.Name], lang + " MenuText." + p.Name + " is still English: " + v); }
+                    }
+                    CoopText.SetLangForTests("es");
+                    T.Eq("Alimentar este corral", WheelText.Label("es", "Feed this corral"), "wheel es"); T.Eq("Tarea: alimentar este corral", WheelText.Label("es", "Job: Feed this corral"), "wheel es prefix");
+                    T.Eq("Tarea: my own text", WheelText.Label("es", "Job: my own text"), "player text untouched");
+                    T.Eq("Tomada por Bo", WheelText.ClaimedBy("Bo"), "claimed es");
+                    T.Eq("¡Expedición Fiebre del Plort completada! El rancho gana 1500 newbucks.", CoopNoticeText.Localize("es", "Expedition Plort Rush complete! The ranch earns 1500 newbucks."), "notice es with the expedition name translated");
+                    T.Eq("Экспедиция «Плортовая лихорадка» завершена! Ранчо получает нью-баксы: 1500.", CoopNoticeText.Localize("ru", "Expedition Plort Rush complete! The ranch earns 1500 newbucks."), "notice ru with the expedition name translated");
+                }
+                finally { CoopText.SetLangForTests(null); }
             });
             T.Test("menu polish/board strings: language follows CoopText, 'ago' steps, recap line", () =>
             {
@@ -89,7 +120,7 @@ namespace Lycoreia.Tests
                 bool NoDash(string v) => v != null && v.IndexOf((char)0x2014) < 0 && v.IndexOf((char)0x2013) < 0;
                 try
                 {
-                    foreach (var lang in new[] { "en", "ru" })
+                    foreach (var lang in new[] { "en", "ru", "es" })
                     {
                         CoopText.SetLangForTests(lang);
                         foreach (var p in typeof(MenuText).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
@@ -97,7 +128,7 @@ namespace Lycoreia.Tests
                         foreach (var sec in WhatsNew.For(lang))
                         {
                             T.True(NoDash(sec.Title), "title dash");
-                            foreach (var (text, tryIt) in sec.Items) T.True(NoDash(text + tryIt), lang + " whats-new dash: " + text);
+                            foreach (var it in sec.Items) T.True(NoDash(it.Title + it.Text + it.TryIt), lang + " whats-new dash: " + it.Text);
                         }
                         T.True(NoDash(WheelText.Label(lang, "Look here!")), "wheel dash");
                     }

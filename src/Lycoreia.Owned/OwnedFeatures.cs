@@ -23,6 +23,7 @@ namespace Lycoreia.Compat
             LycoreiaMod.Pumps.Add(new Pump("test-avatar-rig", Lycoreia.Owned.Shared.Utils.TestAvatarRig.Pump));
 #endif
             LycoreiaMod.LatePumps.Add(new Pump("owned-first-person-legs", () => { if (Lycoreia.Game.GameState.Ready) FirstPersonLegs.LateTick(); }));
+            LycoreiaMod.Pumps.Add(new Pump("public-api", Lycoreia.Api.LycoreiaApi.Pump));
             LycoreiaMod.Pumps.Add(new Pump("owned-refinery-reconcile", () => { if (Lycoreia.Game.GameState.Ready) NetworkRefineryManager.Reconcile(); }));
             LycoreiaMod.Pumps.Add(new Pump("owned-world-managers", () => { if (Lycoreia.Game.GameState.Ready && ModFacade.IsNetworkActive) { WorldManagersGlue.Pump(); UpgradesGlue.Pump(); } }));
             LycoreiaMod.Pumps.Add(new Pump("owned-vac-palette", () => { if (Lycoreia.Game.GameState.Ready) NetworkVacPaletteManager.Pump(); }));

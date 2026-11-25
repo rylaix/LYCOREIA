@@ -71,7 +71,7 @@ namespace Lycoreia.Game.World
     static class DepositorFilledHook { static void Postfix(Il2Cpp.PlortDepositor __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Depositors.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PlortDepositor.OnFilledChanged", e); } } }
     [HarmonyPatch(typeof(Il2Cpp.PuzzleSlot), nameof(Il2Cpp.PuzzleSlot.OnFilledChanged))]
     static class SlotFilledChangedHook { static void Postfix(Il2Cpp.PuzzleSlot __instance) { try { if (WH.On && !Applying.Active && __instance?._model != null) WorldRuntime.Slots.OnModelChanged(__instance._model); } catch (Exception e) { HookGuard.Fail("PuzzleSlot.OnFilledChanged", e); } } }
-    // 2.1.1 (disassembly 2026-11-13): a plort entering a depositor/slot is handled in OnTriggerEnter, which writes the model's amount/filled
+    // 2.1.1 (game binary analysis 2026-11-13): a plort entering a depositor/slot is handled in OnTriggerEnter, which writes the model's amount/filled
     // inline and calls the lock's NotifySlotChanged; it never calls OnFilledChanged (that runs only from InitLock/the model). So a local fill
     // was never published, and doors driven by a lock without an AccessDoor (animator "porthole" doors) never opened on the other seat.
     [HarmonyPatch(typeof(Il2Cpp.PlortDepositor), nameof(Il2Cpp.PlortDepositor.OnTriggerEnter))]
@@ -119,7 +119,7 @@ namespace Lycoreia.Game.World
         static Exception Finalizer(Exception __exception) { if (WorldRuntime.SaleDepth > 0) WorldRuntime.SaleDepth--; return __exception; }
     }
     /// <summary>The plort market itself: native ScorePlort.Deposit calls PlayerState.AddCurrency then RegisterSold and never goes
-    /// through TrySell (disassembly 2026-11-08). Without this scope a guest's market sale reached the host twice (currency delta + PlortSold).</summary>
+    /// through TrySell (game binary analysis 2026-11-08). Without this scope a guest's market sale reached the host twice (currency delta + PlortSold).</summary>
     [HarmonyPatch(typeof(ScorePlort), nameof(ScorePlort.Deposit))]
     static class ScorePlortDepositHook
     {

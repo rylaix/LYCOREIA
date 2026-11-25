@@ -37,6 +37,9 @@ internal static partial class NetworkShopManager
     private static ulong lastClientRevision;
     private static ShopStateSnapshotPacket? pendingClientSnapshot;
     private static float nextPendingApplyLog;
+    private static float nextPendingApplyAt;
+    private const float PendingApplyRetrySeconds = 2f;
+    private static ShopDirector? cachedDirector;
     private static float nextHostSnapshotRetryAt;
     private static float nextHostSnapshotRetryLogAt;
     private static string? pendingRestockSnapshotReason;
@@ -219,11 +222,13 @@ internal static partial class NetworkShopManager
             RequestId = Guid.NewGuid(),
             ShopAssetTag = shopTag,
             ItemAssetGuid = itemGuid,
-            Count = count
+            Count = count,
+            CategoryName = category?.AnalyticsName ?? string.Empty,
+            UnlockType = (int)item.UnlockType
         };
         PendingClientRequests.Add(packet.RequestId);
         DiagLog.LogDiagnostic("shop", "purchase-requested",
-            $"requestId={packet.RequestId}; shop={packet.ShopAssetTag}; item={packet.ItemAssetGuid}; count={packet.Count}");
+            $"requestId={packet.RequestId}; shop={packet.ShopAssetTag}; category={packet.CategoryName}; item={packet.ItemAssetGuid}; unlock={packet.UnlockType}; count={packet.Count}");
         OwnedLog.LogMessage(
             $"Shop purchase intent sent requestId={packet.RequestId} " +
             $"shop={packet.ShopAssetTag} item={packet.ItemAssetGuid} count={packet.Count}");
@@ -238,6 +243,78 @@ internal static partial class NetworkShopManager
             OwnedLog.LogError($"Shop purchase intent requestId={packet.RequestId} could not be sent: {exception}");
             return false;
         }
+    }
+
+    /// <summary>rc11 guest purchase: the guest's own shop already ran the native purchase (its stock is generated locally and differs
+    /// from the host's; rc10 logs: every host lookup found=0). Money and refinery spends reach the host through the wallet and
+    /// refinery deltas; actors through actor sync. Only the shared purchase record (sold-out / limits) is sent here.</summary>
+    internal static void RecordGuestPurchase(ShopRuntimeItem item, int count)
+    {
+        if (HandlingPacket || !ModFacade.Client.IsConnected || ModFacade.Server.IsRunning || item == null || count < 1)
+            return;
+        try
+        {
+            string itemId = item.UniqueId.Id ?? string.Empty;
+            int unlock = (int)item.UnlockType;
+            string key = string.Empty; int seed = 0;
+            var sets = FindShopDirector()?._dataModel?._shopPurchasesByCategory;
+            if (sets != null)
+            {
+                foreach (var pair in sets)
+                {
+                    var set = pair.Value;
+                    if (set?.Purchases == null) continue;
+                    foreach (var purchase in set.Purchases)
+                        if (purchase != null && (int)purchase.UnlockType == unlock && purchase.UniqueId.Id == itemId) { key = pair.Key; seed = set.Seed; break; }
+                    if (key.Length > 0) break;
+                }
+            }
+            var category = item.OwningCategory;
+            var packet = new ShopPurchaseRequestPacket
+            {
+                RequestId = Guid.NewGuid(), Record = true,
+                ShopAssetTag = category?.SourceShopAssetTag ?? "shop", ItemAssetGuid = string.IsNullOrEmpty(item.AssetGuid) ? itemId : item.AssetGuid,
+                CategoryName = category?.AnalyticsName ?? string.Empty, UnlockType = unlock, Count = count,
+                PurchaseSetKey = key, PurchaseSetSeed = seed, ItemId = itemId
+            };
+            DiagLog.LogDiagnostic("shop", "guest-purchase-recorded",
+                $"category={packet.CategoryName}; set={key}; seed={seed}; item={packet.ItemAssetGuid}; id={itemId}; unlock={unlock}; count={count}");
+            OwnedLog.LogMessage($"Shop purchase done locally, sent to the host: category={packet.CategoryName} item={packet.ItemAssetGuid} id={itemId} set={(key.Length > 0 ? key : "-")} count={count}");
+            ModFacade.Client.SendPacket(packet);
+        }
+        catch (Exception exception)
+        {
+            OwnedLog.LogWarning($"Could not send the shop purchase record: {exception.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    private static void ApplyGuestPurchaseRecord(ShopPurchaseRequestPacket packet, string playerId)
+    {
+        var model = FindShopDirector()?._dataModel;
+        var sets = model?._shopPurchasesByCategory;
+        if (sets == null || string.IsNullOrWhiteSpace(packet.PurchaseSetKey) || string.IsNullOrWhiteSpace(packet.ItemId))
+        {
+            // No set key: the guest's game kept no purchase record for this item (e.g. unlimited stock). Money and items already synced.
+            OwnedLog.LogMessage($"Guest shop purchase from {playerId}: {packet.CategoryName} {packet.ItemAssetGuid} x{packet.Count} (no purchase set to share).");
+            DiagLog.LogDiagnostic("shop", "guest-purchase-applied", $"player={playerId}; category={packet.CategoryName}; item={packet.ItemAssetGuid}; set=-; count={packet.Count}");
+            QueueSnapshotAfterNextFrame("guest purchase");
+            return;
+        }
+        ShopDataPurchaseSet set;
+        if (sets.ContainsKey(packet.PurchaseSetKey) && sets[packet.PurchaseSetKey] != null)
+            set = sets[packet.PurchaseSetKey];
+        else
+        {
+            set = new ShopDataPurchaseSet { _categoryIdentifier = packet.PurchaseSetKey, _seed = packet.PurchaseSetSeed };
+            sets[packet.PurchaseSetKey] = set;
+        }
+        var uniqueId = new ShopItemId { _id = packet.ItemId };
+        var itemInfo = ShopDataItemInfo.FromUniqueIdExplicit(ref uniqueId, (AcquireGadgetType)Math.Max(0, packet.UnlockType));
+        set.AddPurchase(ref itemInfo, packet.Count);
+        OwnedLog.LogMessage($"Guest shop purchase from {playerId} recorded: set={packet.PurchaseSetKey} item={packet.ItemAssetGuid} id={packet.ItemId} x{packet.Count}");
+        DiagLog.LogDiagnostic("shop", "guest-purchase-applied",
+            $"player={playerId}; category={packet.CategoryName}; item={packet.ItemAssetGuid}; set={packet.PurchaseSetKey}; seed={set.Seed}/{packet.PurchaseSetSeed}; count={packet.Count}");
+        QueueSnapshotAfterNextFrame("guest purchase");
     }
 
     internal static void HandlePurchaseResult(ShopPurchaseResultPacket packet)
@@ -261,7 +338,10 @@ internal static partial class NetworkShopManager
 
         try
         {
-            MultiplayerUI.Instance?.ShowLocalSystemMessage("The host rejected that shop purchase; shop state is being resynchronized.");
+            MultiplayerUI.Instance?.ShowLocalSystemMessage(Lycoreia.Text.CoopText.Pick(
+                "The host could not complete that purchase; the shop is being resynchronized.",
+                "Хост не смог провести эту покупку - магазин синхронизируется заново.",
+                "El anfitrión no pudo completar esa compra; la tienda se está sincronizando de nuevo."));
         }
         catch (Exception exception)
         {
@@ -280,6 +360,12 @@ internal static partial class NetworkShopManager
             return false;
 
         var playerId = clientInfo!.PlayerId;
+        if (packet.Record)
+        {
+            try { ApplyGuestPurchaseRecord(packet, playerId); }
+            catch (Exception exception) { OwnedLog.LogWarning($"Guest shop purchase record from {playerId} failed: {exception.GetType().Name}: {exception.Message}"); }
+            return false;
+        }
         var previousRequest = PurchaseDecisions.TryGetDecision(playerId, packet.RequestId,
             packet.ShopAssetTag, packet.ItemAssetGuid, packet.Count, out var previousDecision);
         if (previousRequest == ShopPurchaseRequestLookup.Duplicate)
@@ -306,12 +392,14 @@ internal static partial class NetworkShopManager
             return false;
 
         var accepted = false;
-        if (!TryFindRuntimeItem(packet.ShopAssetTag, packet.ItemAssetGuid, out _, out var item))
+        if (!TryFindRuntimeItem(packet.ShopAssetTag, packet.ItemAssetGuid, packet.CategoryName, packet.UnlockType, out _, out var item, out var lookup))
         {
             OwnedLog.LogWarning(
                 $"Shop purchase decision requestId={packet.RequestId} result=rejected " +
                 $"from={playerId}: " +
-                $"item '{packet.ItemAssetGuid}' in shop '{packet.ShopAssetTag}' is not uniquely loaded on host.");
+                $"item '{packet.ItemAssetGuid}' in shop '{packet.ShopAssetTag}' category '{packet.CategoryName}' is not uniquely loaded on host ({lookup}).");
+            DiagLog.LogDiagnostic("shop", "purchase-item-missing",
+                $"requestId={packet.RequestId}; shop={packet.ShopAssetTag}; category={packet.CategoryName}; item={packet.ItemAssetGuid}; unlock={packet.UnlockType}; {lookup}");
         }
         else if (ShopRuntimeTransactor.Instance == null)
         {
@@ -374,6 +462,7 @@ internal static partial class NetworkShopManager
         if (!TryApplySnapshot(packet, out var error))
         {
             pendingClientSnapshot = packet;
+            nextPendingApplyAt = Time.unscaledTime + PendingApplyRetrySeconds;
             if (Time.unscaledTime >= nextPendingApplyLog)
             {
                 nextPendingApplyLog = Time.unscaledTime + 10f;
@@ -405,6 +494,12 @@ internal static partial class NetworkShopManager
 
         if (pendingClientSnapshot == null || !ModFacade.Client.IsConnected)
             return;
+
+        // a snapshot that could not be applied was retried EVERY FRAME (a full shop capture, ~60 ms on the guest, plus a
+        // FindObjectsOfTypeAll), so one failed purchase made the guest's game stutter until they left. Retry every 2 s instead.
+        if (Time.unscaledTime < nextPendingApplyAt)
+            return;
+        nextPendingApplyAt = Time.unscaledTime + PendingApplyRetrySeconds;
 
         var snapshot = pendingClientSnapshot;
         if (!ShouldAcceptSnapshot(lastClientSessionId, lastClientRevision, snapshot.SessionId, snapshot.Revision))
@@ -586,6 +681,7 @@ internal static partial class NetworkShopManager
         lastClientRevision = 0;
         pendingClientSnapshot = null;
         nextPendingApplyLog = 0;
+        nextPendingApplyAt = 0;
         PendingClientRequests.Clear();
     }
 
@@ -673,7 +769,7 @@ internal static partial class NetworkShopManager
 
     private static bool TryCaptureRuntimes(ShopDirector director,
         out ShopRuntimeState[] runtimeStates, out List<ShopRuntimeItem> loadedItems, out string error,
-        string reason = "shop snapshot")
+        string reason = "shop snapshot", bool allowDuplicateItems = false)
     {
         runtimeStates = Array.Empty<ShopRuntimeState>();
         loadedItems = new List<ShopRuntimeItem>();
@@ -784,9 +880,19 @@ internal static partial class NetworkShopManager
                 for (var itemIndex = 0; itemIndex < category._cachedItemList.Count; itemIndex++)
                 {
                     var item = category._cachedItemList[itemIndex];
-                    if (item == null || string.IsNullOrWhiteSpace(item.AssetGuid) || !itemGuids.Add(item.AssetGuid))
+                    if (item == null || string.IsNullOrWhiteSpace(item.AssetGuid))
                     {
-                        error = $"Category '{analyticsName}' has missing or duplicate item asset IDs.";
+                        error = $"Category '{analyticsName}' has missing item asset IDs.";
+                        return false;
+                    }
+
+                    if (!itemGuids.Add(item.AssetGuid))
+                    {
+                        // after a reseed with the host's seed the guest's RangeExchange listed one item twice (its stock also
+                        // depends on local unlocks); the readiness check failed forever and no later snapshot could apply.
+                        if (allowDuplicateItems)
+                            continue;
+                        error = $"Category '{analyticsName}' has duplicate item asset IDs.";
                         return false;
                     }
 
@@ -847,21 +953,21 @@ internal static partial class NetworkShopManager
                     return false;
                 }
 
+                // rc11: entries travel by the game's ShopItemId, so a purchase of an item only one seat stocks is kept.
+                var itemId = purchase.UniqueId.Id ?? string.Empty;
                 var matchingGuids = loadedItems
                     .Where(item => item.UnlockType == purchase.UnlockType &&
                                    item.UniqueId.Equals(purchase.UniqueId))
                     .Select(item => item.AssetGuid)
                     .Distinct(StringComparer.Ordinal)
                     .ToArray();
-                // Saved history keeps purchases from earlier rotations that are no longer stocked.
-                // Sold-out state is captured from the live stock, so an unmappable entry is skipped
-                // instead of aborting every shop sync for the whole session.
-                if (matchingGuids.Length != 1)
+                if (itemId.Length == 0 && matchingGuids.Length != 1)
                     continue;
 
                 purchases.Add(new ShopPurchaseEntryState
                 {
-                    ItemAssetGuid = matchingGuids[0],
+                    ItemAssetGuid = matchingGuids.Length == 1 ? matchingGuids[0] : string.Empty,
+                    ItemId = itemId,
                     UnlockType = (int)purchase.UnlockType,
                     Count = purchase.Count
                 });
@@ -947,7 +1053,7 @@ internal static partial class NetworkShopManager
             return false;
         }
 
-        if (!TryCaptureRuntimes(director, out _, out _, out error))
+        if (!TryCaptureRuntimes(director, out _, out _, out error, allowDuplicateItems: true))
             return false;
 
         var localRuntimes = director._runtimes.ToArray()
@@ -1032,10 +1138,12 @@ internal static partial class NetworkShopManager
                 {
                     var category = localCategories[(runtimeState.ShopAssetTag, categoryState.AnalyticsName)];
                     var items = GetCategoryItems(category);
-                    var itemsByGuid = items.ToDictionary(item => item.AssetGuid, StringComparer.Ordinal);
-                    foreach (var itemState in categoryState.Items)
-                        if (itemsByGuid.TryGetValue(itemState.AssetGuid, out var localItem))
-                            stockUpdates.Add((localItem, itemState.IsSoldOut));
+                    var hostItems = categoryState.Items.ToDictionary(item => item.AssetGuid, item => item.IsSoldOut, StringComparer.Ordinal);
+                    // rc11: the guest's stock is generated locally and can differ from the host's; the guest buys its own items natively.
+                    // Only items the host also lists take the host's sold-out state; the rest keep the local state.
+                    foreach (var localItem in items)
+                        if (hostItems.TryGetValue(localItem.AssetGuid, out var soldOut))
+                            stockUpdates.Add((localItem, soldOut));
                 }
             }
 
@@ -1047,24 +1155,10 @@ internal static partial class NetworkShopManager
                 return false;
             }
 
-            var priorPendingSources = new HashSet<string>(StringComparer.Ordinal);
-            if (director._dataModel._itemsPendingSpawn != null)
-            {
-                foreach (var pendingSource in director._dataModel._itemsPendingSpawn)
-                    priorPendingSources.Add(pendingSource.Key);
-            }
-
-            var changedSources = priorPendingSources
-                .Union(packet.PendingSpawns.Select(source => source.SourceId), StringComparer.Ordinal)
-                .ToArray();
-            foreach (var sourceId in changedSources)
-            {
-                if (!pendingQueues.TryGetValue(sourceId, out _))
-                    pendingQueues[sourceId] = new CppCollections.Queue<IdentifiableType>();
-            }
-
+            // rc11: pending shop spawns stay per seat. Each seat delivers what it bought itself (the spawned actors sync); copying the
+            // host's queues would drop the guest's own deliveries and could spawn the host's twice.
+            _ = pendingQueues;
             director._dataModel._shopPurchasesByCategory = purchaseSets;
-            director._dataModel._itemsPendingSpawn = pendingQueues;
 
             foreach (var runtimeState in packet.Runtimes)
             {
@@ -1091,22 +1185,6 @@ internal static partial class NetworkShopManager
                 }
             }
 
-            var pendingChanged = director.PendingSpawnItemsChanged;
-            if (pendingChanged != null)
-            {
-                foreach (var sourceId in changedSources)
-                {
-                    try
-                    {
-                        if (director._dataModel.TryGetItemsPendingSpawn(sourceId, out var items))
-                            pendingChanged.Invoke(sourceId, items);
-                    }
-                    catch (Exception exception)
-                    {
-                        OwnedLog.LogWarning($"Pending shop-spawn notification failed for '{sourceId}': {exception.Message}");
-                    }
-                }
-            }
         }
         catch (Exception exception)
         {
@@ -1138,6 +1216,13 @@ internal static partial class NetworkShopManager
 
             foreach (var purchase in state.Purchases)
             {
+                if (!string.IsNullOrEmpty(purchase.ItemId))
+                {
+                    var id = new ShopItemId { _id = purchase.ItemId };
+                    var info = ShopDataItemInfo.FromUniqueIdExplicit(ref id, (AcquireGadgetType)purchase.UnlockType);
+                    set.AddPurchase(ref info, purchase.Count);
+                    continue;
+                }
                 var candidates = localCategories.Values
                     .SelectMany(GetCategoryItems)
                     .Where(item => item.AssetGuid == purchase.ItemAssetGuid &&
@@ -1182,6 +1267,27 @@ internal static partial class NetworkShopManager
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// (rc8 logs): the game fills a category's item list only when that seat opens the shop UI (ShopRuntime.StartUISession clears
+    /// the cache, the UI repopulates it). A host that never opened the shop had EMPTY lists: every snapshot told the guest "no stock" and
+    /// every guest purchase was rejected (found=0). The host now builds empty categories itself through the same call the shop page uses
+    /// (GetRuntimeItems with the shop's event director), which is the stock its own UI would show.
+    /// </summary>
+    private static string StockSummary(ShopDirector director)
+    {
+        try
+        {
+            var parts = new List<string>();
+            foreach (var runtime in director._runtimes)
+                if (runtime != null)
+                    foreach (var category in GetCategories(runtime))
+                        if (category != null)
+                            parts.Add($"{category.AnalyticsName}:{category._cachedItemList?.Count ?? -1}");
+            return string.Join(",", parts);
+        }
+        catch (Exception exception) { return "error:" + exception.GetType().Name; }
     }
 
     private static bool ValidatePacket(ShopStateSnapshotPacket packet, out string error)
@@ -1244,9 +1350,9 @@ internal static partial class NetworkShopManager
             var entries = new HashSet<(string, int)>();
             foreach (var purchase in set.Purchases)
             {
-                if (purchase == null || string.IsNullOrWhiteSpace(purchase.ItemAssetGuid) ||
+                if (purchase == null || (string.IsNullOrWhiteSpace(purchase.ItemAssetGuid) && string.IsNullOrWhiteSpace(purchase.ItemId)) ||
                     purchase.UnlockType < 0 || purchase.Count <= 0 ||
-                    !entries.Add((purchase.ItemAssetGuid, purchase.UnlockType)))
+                    !entries.Add((string.IsNullOrEmpty(purchase.ItemId) ? "g:" + purchase.ItemAssetGuid : "i:" + purchase.ItemId, purchase.UnlockType)))
                 {
                     error = $"Shop purchase set '{set.CategoryIdentifier}' contains an invalid purchase.";
                     return false;
@@ -1272,38 +1378,79 @@ internal static partial class NetworkShopManager
 
     private static ShopDirector? FindShopDirector()
     {
+        if (cachedDirector && cachedDirector!._dataModel != null)
+            return cachedDirector;
+        cachedDirector = null;
         var directors = Resources.FindObjectsOfTypeAll<ShopDirector>()
             .Where(director => director && director._dataModel != null)
             .ToArray();
-        return directors.Length == 1 ? directors[0] : null;
+        if (directors.Length == 1)
+            cachedDirector = directors[0];
+        return cachedDirector;
     }
 
-    private static bool TryFindRuntimeItem(string shopTag, string itemGuid,
-        out ShopDirector? director, out ShopRuntimeItem? item)
+    /// <summary>
+    /// Finds the host's runtime item for a guest purchase. Before rc7 the lookup demanded exactly one item with this asset guid among the
+    /// runtimes tagged like the guest's category; the same item listed in two categories (or a category whose source tag differs from its
+    /// runtime's tag) was rejected as "not uniquely loaded" and the guest's toy purchases did nothing. Now: every loaded runtime,
+    /// narrowed by runtime tag, then category, then unlock type; several left that are equivalent items count as one.
+    /// </summary>
+    private static bool TryFindRuntimeItem(string shopTag, string itemGuid, string? categoryName, int unlockType,
+        out ShopDirector? director, out ShopRuntimeItem? item, out string lookup)
     {
         director = FindShopDirector();
         item = null;
+        lookup = "no shop director";
         if (!director || director!._runtimes == null)
             return false;
 
-        var matching = new List<ShopRuntimeItem>();
+        var all = new List<(ShopRuntimeItem Item, bool Tag, bool Category, bool Unlock, string Where)>();
+        int runtimes = 0, tagged = 0, categories = 0;
         foreach (var runtime in director._runtimes)
         {
-            if (runtime == null || runtime.Definition == null || runtime.Definition.ShopAssetTag != shopTag)
+            if (runtime == null || runtime.Definition == null)
                 continue;
-
+            runtimes++;
+            var runtimeTag = runtime.Definition.ShopAssetTag;
+            var tagMatch = runtimeTag == shopTag;
+            if (tagMatch) tagged++;
             foreach (var category in GetCategories(runtime))
-            foreach (var candidate in GetCategoryItems(category))
             {
-                if (candidate.AssetGuid == itemGuid)
-                    matching.Add(candidate);
+                categories++;
+                var categoryMatch = !string.IsNullOrEmpty(categoryName) && category.AnalyticsName == categoryName;
+                foreach (var candidate in GetCategoryItems(category))
+                {
+                    if (candidate.AssetGuid != itemGuid)
+                        continue;
+                    all.Add((candidate, tagMatch || category.SourceShopAssetTag == shopTag, categoryMatch,
+                        unlockType < 0 || (int)candidate.UnlockType == unlockType, runtimeTag + "/" + category.AnalyticsName));
+                }
             }
         }
 
-        if (matching.Count != 1)
+        var pick = all;
+        if (pick.Any(c => c.Tag)) pick = pick.Where(c => c.Tag).ToList();
+        if (pick.Count > 1 && pick.Any(c => c.Category)) pick = pick.Where(c => c.Category).ToList();
+        if (pick.Count > 1 && pick.Any(c => c.Unlock)) pick = pick.Where(c => c.Unlock).ToList();
+        lookup = $"runtimes={runtimes}; tagged={tagged}; categories={categories}; items={StockSummary(director)}; found={all.Count}" +
+                 (all.Count > 0 ? $" in {string.Join(",", all.Select(c => c.Where))}" : string.Empty);
+        if (pick.Count == 0)
             return false;
 
-        item = matching[0];
+        var first = pick[0].Item;
+        foreach (var other in pick.Skip(1))
+        {
+            if (other.Item.Pointer == first.Pointer)
+                continue;
+            bool same;
+            try { same = first.EquivalentTo(other.Item); } catch { same = false; }
+            if (!same && (int)other.Item.UnlockType != (int)first.UnlockType)
+                return false;   // really different items under one guid: refuse rather than sell the wrong one
+        }
+
+        item = first;
+        if (all.Count > 1)
+            OwnedLog.LogMessage($"Shop purchase lookup: item '{itemGuid}' is listed {all.Count} times ({lookup}); using {pick[0].Where}.");
         return true;
     }
 

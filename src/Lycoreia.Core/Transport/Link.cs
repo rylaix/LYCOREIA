@@ -18,7 +18,7 @@ namespace Lycoreia.Net
     {
         // Reliable means reliable while the peer is alive. Until 2.0.1 a message gave up after 10 s and was silently dropped while the
         // session stayed up (the host only drops a silent guest after 30 s): on lossy or filtered paths (TSPU, VPN proxies) any blackout
-        // of 10-30 s lost state changes for good (issue 2026-11-09). Now sending outlasts the session's own drop timeout, resends back
+        // of 10-30 s lost state changes for good. Now sending outlasts the session's own drop timeout, resends back
         // off after the first rounds so a blackout does not flood the path, and the receiver waits as long before skipping a gap.
         public const int ResendIntervalMs = 500, BackoffResendIntervalMs = 1000, FastResendRounds = 6;
         public const int GiveUpMs = 32_000, GiveUpLargeMs = 45_000, MaxAttempts = 96;

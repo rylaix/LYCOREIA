@@ -9,7 +9,7 @@ namespace Lycoreia.Owned.Components.UI;
 internal static class WhatsNewPopup
 {
     internal const string Key = "whatsnew.version";
-    private const float SettleSeconds = 1.5f, PanelW = 1020f, PanelH = 700f;
+    private const float SettleSeconds = 1.5f, PanelW = 1040f, Pad = 40f;
     private const int MaxItems = 4;
 
     private static RectTransform? root, panel;
@@ -50,31 +50,44 @@ internal static class WhatsNewPopup
         if (sections.Count == 0) return;
         SeenFlags.Set(Key, BuildInfo.Version);   // once: it counts as seen the moment it is shown
 
-        var dim = new UiPanel { CustomColor = new Color(0f, 0f, 0f, 0.55f), Anchors = new Vector4(0f, 0f, 1f, 1f) };
-        var card = new UiPanel { Color = UiColor.Primary, CornerRadius = 22, Size = new Vector2(PanelW, PanelH) };
-        card.Children.Add(MenuPolish.Label("<b>" + MenuText.WhatsNewHeading(BuildInfo.Version) + "</b>", PanelW - 60f, 60f, 34f, UiColor.TextCategory, TextAlignmentOptions.Left, new Vector2(0f, PanelH / 2f - 20f - 30f)));
-        card.Children.Add(MenuPolish.Label("<size=80%><alpha=#BB>" + sections[0].Title + "</size>", PanelW - 60f, 36f, 24f, UiColor.TextGeneral, TextAlignmentOptions.Left, new Vector2(0f, PanelH / 2f - 84f - 18f)));
-        var items = sections[0].Items;
-        float y = PanelH / 2f - 120f;
-        for (int i = 0; i < Math.Min(MaxItems, items.Count); i++)
+        // Layout (rc6): eyebrow (section, accent) > title (large) > 2x2 cards > "and N more" > buttons, primary action on the right.
+        var items = sections[0].Items.Take(MaxItems).ToList();
+        float gridW = PanelW - 2f * Pad;
+        var grid = WhatsNewCards.Grid(items, gridW, showTry: false);
+        int more = sections[0].Items.Count - items.Count + sections.Skip(1).Sum(s => s.Items.Count);
+        const float eyebrowH = 28f, titleH = 52f, moreH = 30f, buttonH = 58f;
+        float panelH = Pad + eyebrowH + 4f + titleH + 20f + grid.Size.y + (more > 0 ? 12f + moreH : 0f) + 28f + buttonH + Pad;
+
+        var dim = new UiPanel { CustomColor = new Color(0f, 0f, 0f, 0.6f), Anchors = new Vector4(0f, 0f, 1f, 1f) };
+        var card = new UiPanel { Color = UiColor.Primary, CornerRadius = 22, Size = new Vector2(PanelW, panelH) };
+        float y = panelH / 2f - Pad;
+        card.Children.Add(MenuPolish.Label(sections[0].Title, gridW, eyebrowH, 20f, UiColor.TextCategory, TextAlignmentOptions.Left, new Vector2(0f, y - eyebrowH / 2f)));
+        y -= eyebrowH + 4f;
+        card.Children.Add(MenuPolish.Label(MenuText.WhatsNewHeading(BuildInfo.Version), gridW, titleH, 38f, UiColor.TextGeneral, TextAlignmentOptions.Left, new Vector2(0f, y - titleH / 2f)));
+        y -= titleH + 20f;
+        grid.Position = new Vector2(0f, y - grid.Size.y / 2f);
+        card.Children.Add(grid);
+        y -= grid.Size.y;
+        if (more > 0)
         {
-            card.Children.Add(MenuPolish.Fixed("• " + items[i].text, PanelW - 70f, 22f, UiColor.TextGeneral, TextAlignmentOptions.TopLeft, new Vector2(0f, y - 48f), 96f));
-            y -= 100f;
+            y -= 12f;
+            card.Children.Add(MenuPolish.Label("<alpha=#99>" + MenuText.PopupMore(more), gridW, moreH, 18f, UiColor.TextGeneral, TextAlignmentOptions.Left, new Vector2(0f, y - moreH / 2f)));
         }
-        int more = items.Count - MaxItems + sections.Skip(1).Sum(s => s.Items.Count);
-        if (more > 0) card.Children.Add(MenuPolish.Label("<alpha=#BB>" + MenuText.PopupMore(more), PanelW - 70f, 36f, 22f, UiColor.TextCategory, TextAlignmentOptions.Left, new Vector2(0f, y - 14f)));
-        card.Children.Add(MenuPolish.Button(MenuText.PopupRead, 360f, 58f, () => { Close(true); LycoreiaMenu.OpenWhatsNew(); }, true, new Vector2(-200f, -PanelH / 2f + 20f + 29f)));
-        card.Children.Add(MenuPolish.Button(MenuText.PopupGotIt, 360f, 58f, () => Close(true), false, new Vector2(200f, -PanelH / 2f + 20f + 29f)));
+        float by = -panelH / 2f + Pad + buttonH / 2f;
+        const float gotItW = 240f, readW = 320f;
+        card.Children.Add(MenuPolish.Button(MenuText.PopupGotIt, gotItW, buttonH, () => Close(true), false, new Vector2(gridW / 2f - gotItW / 2f, by)));
+        card.Children.Add(MenuPolish.Button(MenuText.PopupRead, readW, buttonH, () => { Close(true); LycoreiaMenu.OpenWhatsNew(); }, true, new Vector2(gridW / 2f - gotItW - 16f - readW / 2f, by)));
         dim.Children.Add(card);
 
         UiCanvas.EnsureEventSystem();
         var r = dim.Render(UiCanvas.Root);
         r.gameObject.name = "LycoreiaWhatsNew";
         root = r; panel = card.Rendered;
+        if (card.Picture) UiPlates.Apply(card.Picture!, PlateKind.Card, height: panelH);
         try { UiFade.Ensure(r.gameObject).Play(panel, 1f, 1f, 0.2f, false, null, 0f, 0.94f); }
         catch (Exception e) { OwnedLog.LogWarning("whats-new fade: " + e.Message); }
         UiFx.Play(UiCue.Open);
-        OwnedLog.LogMessage($"whats-new popup opened: {Math.Min(MaxItems, items.Count)} items, lang={CoopText.RenderLang()}, font={(UiFonts.Default ? UiFonts.Default!.name : "TMP default")}");
+        OwnedLog.LogMessage($"whats-new popup opened: {items.Count} cards, height {panelH:0}, lang={CoopText.RenderLang()}, font={(UiFonts.Default ? UiFonts.Default!.name : "TMP default")}");
     }
 
     private static void Close(bool sound)

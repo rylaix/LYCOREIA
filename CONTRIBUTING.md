@@ -7,8 +7,7 @@ version. Please read [LICENSE](LICENSE) first; by opening a pull request you agr
 
 ## Reporting bugs
 - Use the **Bug report** form in Issues. Co-op bugs almost always need logs from **both** players.
-- Reproduce with the `-deeplog` package if you can; logs are in `UserData/Lycoreia/`
-  (`latest.log`, `diagnostics.jsonl`).
+- Logs are in `UserData/Lycoreia/` (`latest.log`, `diagnostics.jsonl`).
 - Logs can contain IP addresses and player IDs: search them for your public IP and replace it with
   `x.x.x.x` before attaching if you do not want it published.
 - Questions about installing or playing belong on [Discord](https://discord.gg/EvD7WhSwqh), not in issues.

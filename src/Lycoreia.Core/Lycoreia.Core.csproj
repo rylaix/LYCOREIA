@@ -16,6 +16,8 @@
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
     <NoWarn>CS8632;CS8618;CS8600;CS8601;CS8602;CS8603;CS8604;CS8625;CS0108;CS0114;CS0649;CS0169;CS0414;CS8981;IL2CPP0001;CS1591;NU1701</NoWarn>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- no local machine paths in the shipped DLL (the debug directory otherwise records the full .pdb path) -->
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../'))=/_/</PathMap>
     <Flavour Condition="'$(Flavour)'==''">release</Flavour>
     <DefineConstants Condition="'$(Flavour)'=='deeplog'">$(DefineConstants);DEEPLOG;LYCOREIA_DEEPLOG</DefineConstants>
     <DefineConstants Condition="'$(Flavour)'=='test'">$(DefineConstants);DEEPLOG;LYC_TEST;LYCOREIA_DEEPLOG;LYCOREIA_TEST</DefineConstants>
