@@ -22,7 +22,7 @@ Made by **[Rylaix](https://github.com/rylaix)** (core developer) and **[Kum1te](
   players without Steam, and direct joining on the same home network.
 - **Spanish**, a reviewed Russian translation, and many sync fixes (shop purchases of the joining player, radiant
   slimes, the Grey Labyrinth, silos and collectors, doors and gates, and more).
-- **For mod authors**: a public API and an MIT-licensed SDK (`Lycoreia-SDK-2.1.0.zip` on the release page).
+- **For mod authors**: a public API and an MIT-licensed SDK: see [`sdk/`](sdk/) (also as `Lycoreia-SDK-2.1.0.zip` on the release page).
 
 Every player needs 2.1.0. See the [changelog](CHANGELOG.md).
 

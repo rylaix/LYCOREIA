@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Example MelonLoader mod using the Lycoreia SDK (sdk/LycoreiaClient.cs). It does NOT reference Lycoreia.dll.
+       Game references: point GameRefs at your MelonLoader/Il2CppAssemblies + MelonLoader/net6 copies. -->
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>CheatPanelExample</AssemblyName>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <GameRefs Condition="'$(GameRefs)' == ''">$(MSBuildThisFileDirectory)../../../lib</GameRefs>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../LycoreiaClient.cs" Link="LycoreiaClient.cs" />
+    <Reference Include="$(GameRefs)/MelonLoader.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/0Harmony.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/Il2CppInterop.Runtime.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/Il2Cppmscorlib.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/Assembly-CSharp.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/UnityEngine.CoreModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/UnityEngine.IMGUIModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/UnityEngine.TextRenderingModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(GameRefs)/Unity.InputSystem.dll"><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>
